@@ -1,0 +1,105 @@
+{
+  "display_name": "Sample Large Cap Fund",
+  "benchmark": "sample_large_cap",
+  "cash": 2000074.0,
+  "limits": {
+    "max_position": 0.15,
+    "max_stock_active": 0.05,
+    "max_sector_active": 0.08,
+    "max_gross": 1.15,
+    "min_net": 0.9,
+    "max_net": 1.02,
+    "warn_at": 0.9,
+    "net_warn_buffer": 0.02
+  },
+  "positions": [
+    {
+      "ticker": "NVDA",
+      "shares": 38889
+    },
+    {
+      "ticker": "AAPL",
+      "shares": 17000
+    },
+    {
+      "ticker": "MSFT",
+      "shares": 10000
+    },
+    {
+      "ticker": "AVGO",
+      "shares": 5882
+    },
+    {
+      "ticker": "AMD",
+      "shares": 5435
+    },
+    {
+      "ticker": "INTC",
+      "shares": -27027
+    },
+    {
+      "ticker": "GOOGL",
+      "shares": 15000
+    },
+    {
+      "ticker": "META",
+      "shares": 4514
+    },
+    {
+      "ticker": "AMZN",
+      "shares": 17045
+    },
+    {
+      "ticker": "TSLA",
+      "shares": 3409
+    },
+    {
+      "ticker": "LLY",
+      "shares": 2134
+    },
+    {
+      "ticker": "UNH",
+      "shares": 4861
+    },
+    {
+      "ticker": "JNJ",
+      "shares": 6579
+    },
+    {
+      "ticker": "JPM",
+      "shares": 8333
+    },
+    {
+      "ticker": "V",
+      "shares": 5797
+    },
+    {
+      "ticker": "MA",
+      "shares": 2193
+    },
+    {
+      "ticker": "PG",
+      "shares": 8065
+    },
+    {
+      "ticker": "COST",
+      "shares": 1359
+    },
+    {
+      "ticker": "CAT",
+      "shares": 2404
+    },
+    {
+      "ticker": "GE",
+      "shares": 3333
+    },
+    {
+      "ticker": "XOM",
+      "shares": 13043
+    },
+    {
+      "ticker": "CVX",
+      "shares": 3226
+    }
+  ]
+}
