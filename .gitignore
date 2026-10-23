@@ -23,3 +23,6 @@ evals/results.db
 
 # R
 .Rhistory
+
+# Editor / AI tool folders
+.kilo/
