@@ -1,0 +1,998 @@
+% Portfolio Sentinel -- Design Document
+% Updated at the end of every milestone / sub-milestone (see CLAUDE.md).
+% Compile: pdflatex design_doc.tex (run twice for the table of contents), or upload to Overleaf.
+
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+\setlist{itemsep=0.2em}
+
+% ---------- helpers ----------
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+
+\newtcolorbox{keyidea}[1][Key idea]{colback=blue!4,colframe=blue!50!black,
+  fonttitle=\bfseries,title=#1,breakable}
+\newtcolorbox{whyitmatters}[1][Why it matters]{colback=green!4,colframe=green!40!black,
+  fonttitle=\bfseries,title=#1,breakable}
+\newtcolorbox{takeaway}[1][Key takeaway]{colback=orange!5,colframe=orange!70!black,
+  fonttitle=\bfseries,title=#1,breakable}
+\newtcolorbox{reviewq}[1][Review questions]{colback=gray!6,colframe=gray!60!black,
+  fonttitle=\bfseries,title=#1,breakable}
+
+\lstdefinestyle{base}{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{gray!50},
+  backgroundcolor=\color{gray!5},
+  showstringspaces=false,
+  commentstyle=\color{green!40!black},
+  keywordstyle=\color{blue!60!black}\bfseries,
+  stringstyle=\color{red!50!black},
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+}
+\lstdefinestyle{py}{style=base,language=Python}
+\lstdefinestyle{plain}{style=base}
+
+\title{\textbf{Portfolio Sentinel}\\[0.3em]\large Design Document: concepts, architecture, and decisions}
+\author{Aditya Kalkar}
+\date{Last updated: 2026-10-23 (through milestone M1a)}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document explains everything that goes into Portfolio Sentinel: the finance, the code,
+the AI and agent ideas, MCP, Git/GitHub, and why each decision was made. It is written to be
+read cold by someone new to the project. Part~I is background reference that grows as new
+concepts appear. Part~II is a milestone-by-milestone log of what was built, how it works, and
+how it was verified. Each milestone ends with review questions.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =====================================================================
+\section{The big picture}
+% =====================================================================
+
+\subsection{What we are building}
+
+Portfolio Sentinel is an \textbf{AI agent for portfolio managers}. A portfolio manager (PM)
+runs an investment fund. They might ask:
+
+\begin{itemize}
+  \item ``Where are we most overweight versus the benchmark?''
+  \item ``Are we breaching any risk limits right now?''
+  \item ``If I sell \$2M of NVDA, do we still breach anything?''
+\end{itemize}
+
+The agent answers by calling \textbf{tools} that compute the answer in ordinary Python code.
+Every weekday morning it also runs on its own and writes a \textbf{morning brief}: a short
+report on what changed overnight and what needs attention.
+
+\subsection{Why this project exists}
+
+The project demonstrates four engineering capabilities:
+
+\begin{enumerate}
+  \item \textbf{Agents}: a program where a large language model (LLM) decides which tools to
+        call, in what order, and explains the results.
+  \item \textbf{MCP} (Model Context Protocol): an open standard for exposing tools and data
+        to AI models. We build our own MCP server.
+  \item \textbf{Automation}: tests on every push (CI) and a scheduled morning brief, both
+        using GitHub Actions.
+  \item \textbf{Metrics / evals}: measuring how good the agent actually is (accuracy, tool
+        choice, made-up numbers, cost, speed) and improving it with evidence.
+\end{enumerate}
+
+The finance is deliberately simple arithmetic. The hard and interesting part is the agent
+engineering, and proving it works.
+
+\begin{keyidea}[The one rule: the agent never does math]
+LLMs are good at language and at deciding what to do next. They are unreliable at
+arithmetic, and they sometimes produce plausible numbers that are wrong (``hallucination'').
+So every number the agent reports must come from a tool result, computed by tested Python
+code. The model's job is to choose tools and explain what they return. Most of the project's
+architecture follows from this rule.
+\end{keyidea}
+
+\subsection{Architecture at a glance}
+
+\begin{lstlisting}[style=plain]
+  PM question / daily schedule
+              |
+              v
+   +----------------------+        +----------------------+
+   |  Agent (harness)     |<------>|  Claude API          |
+   |  agent loop, prompts,|        |  (model picks tools, |
+   |  logging, limits     |        |   writes answers)    |
+   +----------+-----------+        +----------------------+
+              | MCP (stdio)
+              v
+   +----------------------+
+   |  MCP server          |  thin layer: load data, call analytics, format output
+   +----------+-----------+
+              v
+   +----------------------+        +----------------------+
+   |  analytics.py        |<-------|  data.py             |
+   |  pure functions,     |        |  portfolios, prices, |
+   |  all the math        |        |  benchmarks, sectors |
+   +----------------------+        +----------------------+
+\end{lstlisting}
+
+Read it bottom-up:
+
+\begin{description}[style=nextline]
+  \item[\code{data.py} (built in M1a)] The only code that reads files. It loads the
+        portfolio, benchmark, securities list, and prices.
+  \item[\code{analytics.py} (M1b)] Pure math functions: weights, exposure, benchmark
+        comparison, limit checks, what-if trades. No files, no network, no AI.
+  \item[MCP server (M2)] Wraps analytics as tools an AI can call. It converts decimals
+        (0.142) to percentages (14.2) and rounds. It does no new math.
+  \item[Agent (M3)] A loop we write by hand: send the question and tool list to Claude;
+        if Claude asks for a tool, run it through MCP and send back the result; repeat until
+        Claude gives a final answer.
+  \item[Evals (M4) and morning brief (M5)] Built on top of the agent.
+\end{description}
+
+\begin{whyitmatters}[Why layers?]
+Each layer has one job and strict rules, so each can be tested on its own. If a number is
+wrong, you know where to look: the math lives in exactly one place (\code{analytics.py}),
+file reading lives in exactly one place (\code{data.py}), and the AI never touches either.
+This is called \emph{separation of concerns}.
+\end{whyitmatters}
+
+\subsection{Milestone map}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X l@{}}
+\toprule
+\textbf{Milestone} & \textbf{What it delivers} & \textbf{Status} \\
+\midrule
+Setup & Repo created; spec reviewed; 8 decisions agreed & Done \\
+M0  & Project skeleton (packaging, folders) and CI on GitHub & Done \\
+M1a & Synthetic sample data with a planted story; data loaders & Done \\
+M1b & Analytics core, written test-first & Next \\
+M2  & MCP server with 8 tools; connected to Claude Code & \\
+M3  & Hand-written agent loop, system prompt, run logging & \\
+M4  & Eval harness: test cases, scoring, results history & \\
+M5  & Morning brief, scenario evals, scheduling, delivery & \\
+M6  & Real data (ETF holdings, SEC 13F filings, prices) & \\
+M7  & Streamlit UI, metrics dashboard, deploy, demo & \\
+M8  & Stretch goals (model comparison, prompt-injection tests, ...) & \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% =====================================================================
+\part{Background reference}
+% =====================================================================
+
+\section{Finance primer}
+
+This section covers every finance idea the project uses. Nothing here is beyond basic
+arithmetic; the words are the hard part.
+
+\subsection{Funds, portfolio managers, and positions}
+
+A \textbf{fund} pools money from investors and invests it. The \textbf{portfolio manager}
+decides what the fund owns. Everything the fund owns at one moment is its
+\textbf{portfolio}, and each holding is a \textbf{position}.
+
+A position is described by:
+\begin{itemize}
+  \item \textbf{Ticker}: the short stock symbol (NVDA = NVIDIA, UNH = UnitedHealth).
+  \item \textbf{Shares}: how many units of the stock the fund holds.
+  \item \textbf{Price}: the stock's price. We use the \textbf{close}, the last traded price
+        of the day.
+  \item \textbf{Market value} $=$ shares $\times$ price, in dollars.
+\end{itemize}
+
+Funds also hold some \textbf{cash}, uninvested money that is ready for trades or for
+investors who want their money back.
+
+\subsection{NAV and weights}
+
+\begin{keyidea}[Definitions]
+\textbf{NAV} (net asset value) $=$ sum of all position market values $+$ cash.\\
+\textbf{Weight} of a position $=$ market value $/$ NAV.
+\end{keyidea}
+
+Weight answers ``what share of the fund is this?'' In our sample fund on 2026-10-21:
+
+\begin{itemize}
+  \item NAV $=$ \$50{,}000{,}000.
+  \item NVDA: 38{,}889 shares $\times$ \$180.00 $=$ \$7{,}000{,}020.
+  \item NVDA weight $= 7{,}000{,}020 / 50{,}000{,}000 = 0.1400 = 14.00\%$.
+\end{itemize}
+
+\textbf{Convention used in this project.} Inside the code, weights are decimals (0.14).
+They become percentages (14.0) only at the edge where the AI sees them, in fields whose names
+end in \code{_pct}. Money fields end in \code{_usd}. Using one representation everywhere
+inside the code prevents the classic bug of mixing 0.14 and 14 in the same calculation.
+
+\textbf{Weights drift.} If NVDA's price rises 10\% and nothing else moves, NVDA's market value
+rises, NAV rises by less (NVDA is only part of the fund), and NVDA's weight goes up even
+though nobody traded. That is exactly what happens in our planted story on 2026-10-22.
+
+\subsection{Long and short positions}
+
+\begin{itemize}
+  \item \textbf{Long}: you own the stock. You profit if it rises. Positive shares.
+  \item \textbf{Short}: you borrow shares, sell them now, and buy them back later. You profit
+        if the price \emph{falls}. In this project a short has negative shares, negative
+        market value, and negative weight.
+\end{itemize}
+
+Funds often short a stock as a \textbf{hedge}, to offset some risk. Our sample fund is
+short INTC (Intel) at about $-2\%$ of NAV. It is long several chip stocks (NVDA, AMD,
+AVGO), so a short on another chip company offsets some of that bet. On 2026-10-22, INTC
+falls 3\%, so the short \emph{makes} money.
+
+\textbf{Shorts and cash.} Selling borrowed shares brings cash in. This is why NAV
+$=$ market values $+$ cash still works with shorts: the short's negative market value is the
+cost of buying the shares back.
+
+\subsection{Exposure: long, short, gross, net}
+
+Exposure measures how much of the fund's money is at risk in the market.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Measure} & \textbf{Definition} \\
+\midrule
+Long exposure  & sum of positive weights \\
+Short exposure & sum of negative weights (a negative number) \\
+Gross exposure & long $-$ short \quad (total size of all bets) \\
+Net exposure   & long $+$ short \quad (direction: how much we lean on the market) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Worked example} (this is a test case in M1b): \$100 long, \$20 short, \$20 cash.
+\begin{itemize}
+  \item NAV $= 100 - 20 + 20 = 100$.
+  \item Long $= 100\%$, short $= -20\%$.
+  \item Gross $= 100 - (-20) = 120\%$; net $= 100 + (-20) = 80\%$.
+\end{itemize}
+
+Our sample fund on 2026-10-21: long 98\%, short $-2\%$, cash 4\%, so gross $= 100\%$ and
+net $= 96\%$.
+
+\subsection{Benchmarks and active weight}
+
+Most funds are judged against a \textbf{benchmark}, usually a stock market
+\textbf{index} such as the S\&P~500 (about 500 large US companies, each weighted by its size).
+The question is not just ``did we make money?'' but ``did we beat the benchmark?''
+
+\begin{keyidea}[Active weight]
+Active weight $=$ portfolio weight $-$ benchmark weight.\\
+Positive $=$ \textbf{overweight} (we hold more than the index). Negative $=$
+\textbf{underweight}.
+\end{keyidea}
+
+Examples from our data (2026-10-21):
+\begin{itemize}
+  \item NVDA: fund 14.0\%, benchmark 12.0\%, active $+2.0\%$ (overweight).
+  \item AAPL: fund 8.5\%, benchmark 11.0\%, active $-2.5\%$ (underweight).
+  \item AMD: fund 2.5\%, not in the benchmark (0\%), active $+2.5\%$.
+  \item ORCL: not held (0\%), benchmark 2.0\%, active $-2.0\%$. Not owning something the index
+        owns is also a bet.
+\end{itemize}
+
+Active weights are the PM's \textbf{bets}. A big active weight means the fund's results can
+differ a lot from the index's. That is good if the bet is right and painful if it is wrong.
+
+\subsection{Sectors}
+
+Companies are grouped into \textbf{sectors} by industry. The standard scheme is
+\textbf{GICS} (Global Industry Classification Standard), which has 11 sectors. Our data uses
+8 of them: Information Technology, Communication Services, Consumer Discretionary, Health
+Care, Financials, Consumer Staples, Industrials, Energy.
+
+Sector exposure adds up weights by sector. Sector active weight compares that total with the
+benchmark's sector total. Stocks in the same sector tend to move together, so a big sector bet
+is a concentrated risk even when each single stock looks small.
+
+\subsection{Risk limits, warnings, and breaches}
+
+Firms set \textbf{risk limits} so one bad bet cannot sink the fund. Ours (decimals in the
+portfolio file):
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X l@{}}
+\toprule
+\textbf{Limit} & \textbf{Meaning} & \textbf{Value} \\
+\midrule
+\code{max_position}      & no single position larger than this (by absolute weight) & 15\% \\
+\code{max_stock_active}  & no stock more than this over- or underweight vs benchmark & 5\% \\
+\code{max_sector_active} & no sector more than this over- or underweight & 8\% \\
+\code{max_gross}         & gross exposure at most this & 115\% \\
+\code{min_net}/\code{max_net} & net exposure must stay in this range & 90\%--102\% \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+A \textbf{breach} means the limit is exceeded. A \textbf{warning} means it is close, so the
+PM can act before it becomes a breach:
+
+\begin{itemize}
+  \item For the \code{max_*} limits: warn at 90\% of the limit or more (\code{warn_at} $= 0.9$).
+        For a 15\% position limit, the warning line is $0.9 \times 15\% = 13.5\%$.
+  \item For the net range: warn within 2 percentage points of either end
+        (\code{net_warn_buffer} $= 0.02$), so below 92\% or above 100\%.
+\end{itemize}
+
+\textbf{Why net uses a fixed buffer.} The net range is narrow (90--102\%). ``90\% of the
+limit'' would put the warning line for \code{max_net} at $0.9 \times 102\% = 91.8\%$, so
+nearly every normal fund would always be ``in warning.'' A fixed 2-point distance gives
+sensible warnings.
+
+\textbf{Flag identity} (a decision from the spec review). A flag is identified by its rule and its
+subject, for example (\code{max_position}, NVDA). If a trade turns a breach into a warning on
+the same rule and stock, that counts as ``breach resolved,'' not a new flag.
+
+\subsection{What-if trades}
+
+A \textbf{what-if} (or pre-trade) analysis asks: if I made this trade, what would the
+portfolio look like? In this project trades are in dollars. Positive means buy (or cover a
+short). Negative means sell (or go short). Cash moves the opposite way. A \$1M sale leaves NAV
+unchanged, because \$1M of stock becomes \$1M of cash, but it lowers that stock's weight.
+
+Simplifications we state openly: no transaction costs, no taxes, no settlement delay, and
+trades happen at the closing price.
+
+\subsection{Returns}
+
+\textbf{Price return} over a period $=$ end price $/$ start price $- 1$. For NVDA from
+\$180.00 to \$198.00: $198/180 - 1 = 0.10 = +10\%$. The fund's own return is roughly the
+weighted sum of its positions' returns. NVDA at 14\% weight rising 10\% adds about
+$0.14 \times 10\% = 1.4\%$ to the fund.
+
+% ---------------------------------------------------------------------
+\section{AI, agents, and MCP primer}
+
+These ideas are introduced briefly here and covered in depth in M2 (MCP) and M3 (agents).
+
+\subsection{Large language models}
+
+An \textbf{LLM} (large language model) such as Claude is trained to predict text. Given a
+conversation, it produces the next message. It does not ``look up'' facts or run code by
+itself; it generates likely text. That is why it can write fluent explanations, and also why
+it can confidently produce a wrong number.
+
+\textbf{Tokens.} Models read and write text in small pieces called tokens (roughly
+three-quarters of a word). API usage is billed per million input and output tokens.
+
+\subsection{Tool use}
+
+\textbf{Tool use} (also called function calling) lets a model ask your program to run a
+function. You describe each tool (its name, what it does, and its inputs as a JSON schema).
+The model replies either with text or with a request such as ``call \code{check_limits} with
+\code{portfolio="sample_fund"}''. Your code runs the function and sends the result back. The
+model never runs code itself; your program stays in control.
+
+\subsection{Agents and the agent loop}
+
+An \textbf{agent} is an LLM in a loop with tools:
+
+\begin{enumerate}
+  \item Send the conversation and the tool descriptions to the model.
+  \item If the model asks for a tool, run it and add the result to the conversation.
+  \item Repeat until the model gives a final answer, or a step limit is reached.
+\end{enumerate}
+
+The program around the model (the loop, the logging, the safety limits) is called the
+\textbf{harness}. We write ours by hand, with no framework such as LangChain, so that every line
+is understood and explainable.
+
+\subsection{MCP (Model Context Protocol)}
+
+\textbf{MCP} is an open standard, created by Anthropic, for connecting AI applications to tools
+and data. It is often compared to USB-C: one standard plug instead of a custom integration for
+every pair of app and tool.
+
+\begin{itemize}
+  \item An \textbf{MCP server} offers tools (and optionally data and prompts). Ours will offer
+        8 portfolio tools.
+  \item An \textbf{MCP client} connects to servers and lets a model use their tools. Claude
+        Code is a client, and our agent will be one too.
+  \item \textbf{stdio transport}: the client starts the server as a subprocess and they talk
+        over standard input/output. Simple and local.
+\end{itemize}
+
+Because we use the standard, the same server works in Claude Code (M2) and in our own agent
+(M3) with no changes.
+
+\subsection{Evals}
+
+An \textbf{eval} is a test suite for AI behaviour: a set of questions with known correct
+answers, run against the agent and scored. Unlike unit tests, the system is not
+deterministic, so we measure rates: accuracy, how often the agent picks the right tool first,
+how often it invents numbers, cost, and latency. Evals turn ``it seems better'' into ``accuracy
+went from 72\% to 88\%.''
+
+\subsection{Claude Pro versus the Anthropic API}
+
+These are separate products. Claude Pro is a subscription for using Claude yourself (claude.ai
+and Claude Code), and it covers building this project. The \textbf{Anthropic API} is
+pay-per-token access for your own programs, set up in the Claude Console with its own billing
+and an API key. The agent we build from M3 onward runs as its own program, so it needs an API
+key. The key lives in a \code{.env} file that Git ignores, so it is never committed.
+
+% ---------------------------------------------------------------------
+\section{Software engineering primer}
+
+\subsection{Python packages and the src layout}
+
+A \textbf{package} is a folder of Python modules you can \code{import}. Ours is
+\code{pm_agent}, in \code{src/pm_agent/}. Putting the package under \code{src/} (the
+\emph{src layout}) means tests can only import the package the way users would, after it is
+installed, not by accident from the current folder. That catches packaging mistakes early.
+
+\code{__init__.py} marks a folder as a package. Ours holds only a docstring.
+
+\subsection{Virtual environments}
+
+A \textbf{virtual environment} (\code{.venv/}) is a private copy of Python with its own
+installed libraries, separate from the system Python and from other projects. This avoids
+``project A needs pandas 2, project B needs pandas 3'' conflicts. Create one with
+\code{python -m venv .venv}. Activate it with \code{source .venv/bin/activate}. It is
+listed in \code{.gitignore}, because each machine builds its own.
+
+\subsection{pyproject.toml and dependencies}
+
+\code{pyproject.toml} is the standard file that describes a Python project: its name,
+version, required Python version, and \textbf{dependencies} (libraries it needs).
+\textbf{Version specifiers} constrain which versions are acceptable:
+\begin{itemize}
+  \item \code{mcp>=2.3,<3}: version 2.3 or newer, but not 3.x. A major version (the first
+        number) may contain breaking changes, so we stay below 3 on purpose.
+  \item \code{pandas>=2.2}: anything from 2.2 up.
+\end{itemize}
+
+\textbf{Optional dependencies} (``extras'') are groups you install only when needed. Our
+\code{dev} extra adds \code{pytest}, which developers need but users of the package do not.
+
+\code{pip install -e ".[dev]"} installs the project in \textbf{editable} mode (\code{-e}),
+which links to your source folder so code changes take effect without reinstalling, and
+includes the \code{dev} extra.
+
+\subsection{Testing with pytest}
+
+A \textbf{unit test} is a small function that checks one behaviour. \textbf{pytest} finds
+files named \code{test_*.py}, runs every function named \code{test_*}, and reports passes
+and failures. Useful features we use:
+
+\begin{itemize}
+  \item \code{assert x == y}: the basic check. pytest shows both values when it fails.
+  \item \code{pytest.approx(1.0)}: compare decimals with a small tolerance, since
+        $0.1 + 0.2$ is not exactly $0.3$ in floating point.
+  \item \code{pytest.raises(ValueError, match="...")}: check that code raises an error whose
+        message matches a pattern (a regular expression; \code{.*} means ``anything'').
+  \item \textbf{Fixtures}, such as \code{tmp_path} (a fresh temporary folder) and
+        \code{monkeypatch} (temporarily change environment variables or attributes, undone
+        after the test).
+\end{itemize}
+
+\textbf{Known-answer tests} use inputs small enough to check by hand (two \$50 positions plus
+\$100 cash gives 25\% each). If the test passes, you know the code is right, not just
+consistent with itself.
+
+\textbf{Test-first (TDD).} Write the test, watch it fail, then write the code. Watching it fail
+proves the test actually checks something. A test that can never fail is worthless.
+
+\subsection{Git, GitHub, and secrets}
+
+\begin{description}[style=nextline]
+  \item[Git] Version control: a history of snapshots (\textbf{commits}) of your files. Each
+        commit has a message saying what changed. You can always go back.
+  \item[Repository (repo)] A project folder tracked by Git.
+  \item[Remote / GitHub] A copy of the repo hosted online. \code{git push} uploads your
+        commits; \code{git pull} downloads others'. Ours:
+        \url{https://github.com/adityakalkar/portfolio-sentinel}.
+  \item[Branch] A separate line of commits. We work on \code{main}.
+  \item[.gitignore] A list of files Git should never track: the virtual environment,
+        caches, generated results, and above all \code{.env}.
+  \item[.env] A file of secret settings (the API key). Never committed. \code{.env.example}
+        is the committed template with the values left blank.
+\end{description}
+
+\textbf{Public repos.} Anyone can see every committed file \emph{and} the full history. A
+secret committed once and deleted later is still visible in history, which is why secrets go
+in \code{.env} from day one.
+
+\subsection{CI and GitHub Actions}
+
+\textbf{CI} (continuous integration) runs your tests automatically on every push, on a fresh
+machine. It catches ``works on my machine'' problems (a file you forgot to commit, a library
+installed locally but missing from \code{pyproject.toml}) and stops broken code from slipping
+in unnoticed. A green check or red cross appears next to each commit on GitHub.
+
+\textbf{GitHub Actions} is GitHub's automation service. A \textbf{workflow} is a YAML file in
+\code{.github/workflows/}. It has \textbf{triggers} (\code{on:} push, pull request, a
+schedule, or manual), \textbf{jobs} that run on a virtual machine (a \textbf{runner}), and
+\textbf{steps} inside each job. Steps either \code{uses:} a pre-built action (such as checking
+out the code) or \code{run:}s a shell command. It is free for public repos. We use it for CI
+now and for the scheduled morning brief in M5.
+
+% =====================================================================
+\part{Milestone log}
+% =====================================================================
+
+\section{Setup and spec review}
+
+\subsection{What happened}
+
+\begin{enumerate}
+  \item Created the repo with the initial project documents: the spec (\code{docs/SPEC.md}),
+        the task backlog (\code{docs/TASKS.md}), and \code{CLAUDE.md}.
+  \item Read the whole spec as a critical reviewer and raised 8 issues. All were agreed and
+        written into \code{docs/SPEC.md}.
+  \item Created the GitHub repo \textbf{portfolio-sentinel} with an MIT license,
+        description, and topics.
+\end{enumerate}
+
+\textbf{What \code{CLAUDE.md} is.} A file Claude Code reads automatically at the start of every
+session. It holds the project rules (architecture, conventions, the MCP v2 notes, how to work).
+That is why you can \code{/clear} a session without losing the rules.
+
+\textbf{Why MIT.} The MIT license is short and permissive: anyone may read, use, and modify the
+code as long as they keep the copyright notice. It is a common choice for open-source projects.
+
+\subsection{The 8 spec decisions and their reasoning}
+
+\begin{enumerate}
+  \item \textbf{Leave clear room for the ``\$1M fixes it'' story.} The fix must land clearly
+        below the 13.5\% warning line, not on it, so small data changes cannot flip the result.
+        This turned out to matter in M1a (Section~\ref{sec:m1a-story}).
+  \item \textbf{Flag identity is (rule, subject).} A breach becoming a warning counts as
+        ``resolved,'' not ``new.'' Without this rule, \code{simulate_trades} would be ambiguous.
+  \item \textbf{``Calm'' means no breaches, not no flags.} The 10/21 brief should still mention
+        NVDA's warning in one line.
+  \item \textbf{Exact flags per day.} The sanity tests check the exact set of flags, so no other
+        limit trips by accident and clutters the story.
+  \item \textbf{The made-up-number check exempts some numbers}: numbers from the user's question
+        (``\$1M''), dates, and small integers below 10.
+  \item \textbf{Manual brief only until real data.} On sample data the latest date never
+        changes, so a daily scheduled run would repeat the same brief and spend API credit.
+  \item \textbf{Cron at 12:00 UTC on weekdays.} GitHub's schedules run in UTC and ignore daylight
+        saving, so 12:00 UTC is 7am (winter) or 8am (summer) Eastern, before market open either
+        way.
+  \item \textbf{The ``what you could do'' line covers breaches only}, stated as a fact, never as
+        advice.
+\end{enumerate}
+
+\begin{takeaway}
+The spec was reviewed like a design doc before any code was written, and eight issues were
+fixed: for example, the planted test scenario sat on a knife edge, and ``new flag'' was
+undefined. Fixing ambiguity before coding is cheaper than fixing it in tests or production.
+\end{takeaway}
+
+% ---------------------------------------------------------------------
+\section{M0: repo setup and CI}
+
+\subsection{Goal}
+
+A project that installs cleanly in a fresh environment, with tests running automatically on
+GitHub. Tasks 0.1 (skeleton) and 0.2 (CI).
+
+\subsection{Files created}
+
+\begin{lstlisting}[style=plain]
+.github/workflows/ci.yml     the CI workflow
+pyproject.toml               project metadata and dependencies
+README.md                    placeholder (the real one comes in M7)
+src/pm_agent/__init__.py     the package
+tests/test_smoke.py          one tiny test
+scripts/, data/sample/, evals/, briefs/   folders (with .gitkeep placeholders)
+\end{lstlisting}
+
+\textbf{Why \code{.gitkeep}?} Git tracks files, not folders. An empty folder disappears from
+the repo. An empty placeholder file called \code{.gitkeep} (a convention, not a Git feature)
+keeps it.
+
+\subsection{pyproject.toml, line by line}
+
+\begin{lstlisting}[style=plain]
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+\end{lstlisting}
+Which tool builds the package. \textbf{setuptools} is the long-standing standard.
+
+\begin{lstlisting}[style=plain]
+[project]
+name = "pm-agent"
+version = "0.1.0"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["mcp>=2.3,<3", "pandas>=2.2", "numpy>=1.26"]
+\end{lstlisting}
+The project's identity and needs. \textbf{mcp} is the MCP SDK (for the server in M2).
+\textbf{pandas} provides tables (DataFrames) for the analytics. \textbf{numpy} provides fast
+numeric arrays and the random number generator. The Anthropic SDK is deliberately \emph{not}
+listed yet; it is added in M3, when the agent needs it.
+
+\begin{lstlisting}[style=plain]
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+\end{lstlisting}
+The \code{dev} extra, where to find the package (\code{src/}), and pytest settings: look for
+tests in \code{tests/}, and make \code{src/} importable.
+
+\subsection{The CI workflow, line by line}
+
+\begin{lstlisting}[style=plain]
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4          # download the repo onto the runner
+      - uses: actions/setup-python@v5      # install Python 3.12
+        with:
+          python-version: "3.12"
+          cache: pip                       # reuse downloaded packages between runs
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Run tests
+        run: pytest -q
+\end{lstlisting}
+
+On every push and pull request, GitHub starts a fresh Ubuntu Linux machine, checks out the
+code, installs Python and the project, and runs the tests. If any step fails, the run is red.
+The \code{@v4} and \code{@v5} pin the version of each pre-built action, so an update to the
+action cannot silently change our build.
+
+\subsection{Decisions}
+
+\begin{itemize}
+  \item \textbf{One smoke test instead of zero.} The task said ``0 tests is fine,'' but pytest
+        exits with code 5 when it finds no tests, and CI treats any non-zero exit code as a
+        failure. A one-line test that imports the package keeps CI green and proves the
+        install works.
+  \item \textbf{A placeholder README.} \code{pyproject.toml} points to \code{README.md}, and the
+        install fails if it is missing. It also gives the GitHub page some content.
+  \item \textbf{pandas 3.1 was installed.} pandas 3 enables ``copy-on-write'': a DataFrame
+        derived from another no longer silently changes the original when modified. This helps
+        with our rule that what-if trades must not change the original portfolio. Examples
+        online written for pandas 2 may behave slightly differently.
+\end{itemize}
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item Created a fresh virtual environment, ran \code{pip install -e ".[dev]"}, and ran
+        pytest: \code{1 passed}.
+  \item Checked that \code{ci.yml} is valid YAML.
+  \item Pushed. The first GitHub Actions run succeeded on every step (checkout, set up Python,
+        install, run tests).
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item Why does \code{.venv/} go in \code{.gitignore}, while \code{pyproject.toml} is committed?
+  \item What does \code{mcp>=2.3,<3} allow, and why exclude version 3?
+  \item What would happen in CI if we had zero tests?
+  \item What does the \code{-e} in \code{pip install -e} do?
+  \item Name two kinds of mistake CI catches that running tests locally can miss.
+\end{enumerate}
+\end{reviewq}
+
+% ---------------------------------------------------------------------
+\section{M1a: sample data and loaders}
+
+\subsection{Goal}
+
+Tasks 1.1 and 1.2: generate a realistic but synthetic fund whose data contains a known story,
+and write \code{data.py}, the only module that reads data files.
+
+\subsection{Why synthetic data with a planted story?}
+
+To test whether the morning brief ``finds what matters,'' you need days where you
+\emph{know} what matters. Real market data has no answer key. So we generate data where we
+planted the events ourselves, and we can check whether the agent catches them. This is a common
+technique in testing AI systems: control the inputs so the expected output is known.
+
+\subsection{The four data files}
+
+\begin{lstlisting}[style=plain]
+data/sample/
+  portfolios/sample_fund.json        display_name, benchmark, cash, limits, positions
+  benchmarks/sample_large_cap.csv    ticker, weight      (23 stocks, sums to 1)
+  prices.csv                         date, ticker, close (25 tickers x 5 dates)
+  securities.csv                     ticker, name, sector
+\end{lstlisting}
+
+\textbf{CSV} (comma-separated values) is a plain-text table. \textbf{JSON} is a plain-text
+format for nested data. We use JSON for the portfolio because it has nested parts (a limits
+dictionary and a list of positions).
+
+\subsection{The fund and its benchmark}
+
+The \textbf{Sample Large Cap Fund}: \$50M NAV on 2026-10-21, 22 positions across 8 sectors,
+4\% cash, and one short (INTC, $-2\%$). The benchmark is a 23-stock stand-in for the S\&P~500.
+On purpose, it excludes two of the fund's holdings (AMD and INTC) and includes three stocks the
+fund does not hold (ORCL, ABBV, KO), so the code must handle both ``held but not in the
+benchmark'' and ``in the benchmark but not held.''
+
+Sector comparison on 2026-10-21 (fund net weight versus benchmark):
+
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Sector} & \textbf{Fund} & \textbf{Benchmark} & \textbf{Active} \\
+\midrule
+Information Technology & 37.0\% & 40.0\% & $-3.0\%$ \\
+Communication Services & 14.0\% & 14.0\% & 0.0\% \\
+Consumer Discretionary & 10.5\% & 12.0\% & $-1.5\%$ \\
+Health Care            & 9.5\%  & 10.0\% & $-0.5\%$ \\
+Financials             & 11.5\% & 11.0\% & $+0.5\%$ \\
+Consumer Staples       & 5.0\%  & 5.0\%  & 0.0\% \\
+Industrials            & 4.5\%  & 4.0\%  & $+0.5\%$ \\
+Energy                 & 4.0\%  & 4.0\%  & 0.0\% \\
+\midrule
+Total                  & 96.0\% & 100.0\% & $-4.0\%$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The fund total is 96\% because 4\% is cash. Tech is 37\% net: 39\% long (NVDA, AAPL, MSFT,
+AVGO, AMD) minus the 2\% INTC short.
+
+\subsection{The planted story}\label{sec:m1a-story}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Date} & \textbf{NVDA weight} & \textbf{Status vs 15\% limit} \\
+\midrule
+10/16--10/20 & 13.94\%--14.02\% & warning (at or above 13.5\%) \\
+10/21        & 14.00\% & warning \\
+10/22        & \textbf{15.20\%} & \textbf{breach} \\
+10/22 after selling \$1M & 13.23\% & clear \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+On 2026-10-22: NVDA $+10\%$, UNH $-8\%$ (the biggest loser), AMD $+4\%$, INTC $-3\%$ (the short
+gains). Every other stock moves less than 0.5\%, so nothing competes with the story.
+
+\textbf{Why NVDA starts at 14.0\%, not the 14.2\% in the original spec.} The arithmetic:
+
+\begin{itemize}
+  \item NVDA's value on 10/22 $= 7{,}000{,}020 \times 1.10 = \$7{,}700{,}022$.
+  \item The fund's NAV rises to about \$50.65M (NVDA's gain, minus UNH's loss, plus AMD and the
+        INTC short).
+  \item NVDA weight $= 7.70 / 50.65 \approx 15.20\%$: a breach.
+  \item After a \$1M sale, NAV is unchanged (stock becomes cash), and NVDA's weight is
+        $6.70 / 50.65 \approx 13.23\%$, clearly under 13.5\%.
+\end{itemize}
+
+At 14.2\%, the same sale would have landed at about 13.44\%, almost on the line. That is the
+``knife edge'' from the spec review, decision~1. Moving the starting weight to 14.0\% keeps a clear
+breach \emph{and} a clear fix.
+
+\textbf{Making sure nothing else trips.} The benchmark weights were chosen so that, on every
+day, the largest stock active weight is about 2.5--3.2\% (warning line 4.5\%), the largest
+sector active weight is about 3\% (warning line 7.2\%), gross is 100\% (warning line 103.5\%),
+and net is 96\% (warnings below 92\% or above 100\%). So the only flag is NVDA.
+
+\subsection{How the generator works}
+
+\code{scripts/make_sample_data.py} keeps every story number in clearly named constants at the
+top of the file (\code{FUND_TARGET_WEIGHTS}, \code{BENCHMARK_WEIGHTS}, \code{STORY_MOVES},
+\code{LIMITS}), so the story is visible just by reading them.
+
+\textbf{Step 1: prices.} Each stock has an \emph{anchor price} on 10/21. Earlier days are a
+small random walk \emph{backwards} from the anchor:
+
+\begin{lstlisting}[style=py]
+price = anchor
+for d in reversed(DATES[:anchor_i]):          # 10/20, 10/19, 10/16
+    price = price / (1 + rng.normal(0, DAILY_NOISE))
+    prices[d][ticker] = round(price, 2)
+\end{lstlisting}
+
+Going backwards keeps 10/21 exactly at the anchor, so the target weights are exact on that day.
+On 10/22, the planted stocks get their story move and everyone else gets tiny noise.
+
+\textbf{Step 2: shares.} Shares $=$ target weight $\times$ NAV $/$ anchor price, rounded to whole
+shares (as in a real fund). Cash is whatever makes NAV exactly \$50M, which turned out to be
+\$2{,}000{,}074, about 4\%. Weights therefore match their targets to within 0.01\%.
+
+\textbf{Determinism and the random seed.} A computer's ``random'' numbers come from a formula
+started by a \textbf{seed}. The same seed always gives the same sequence. We fix
+\code{SEED = 42}, so the generator produces identical files every run. Tests depend on exact
+numbers, so they must not change from run to run.
+
+A subtle detail: the noise for 10/22 is drawn for \emph{every} stock, even the ones whose story
+move replaces it:
+
+\begin{lstlisting}[style=py]
+noise = rng.normal(0, STORY_DAY_NOISE)  # always drawn, so the random sequence is stable
+move = STORY_MOVES.get(ticker, noise)
+\end{lstlisting}
+
+If we only drew noise for non-story stocks, adding or removing a story stock would shift every
+random number after it and change unrelated prices.
+
+\subsection{data.py: the loaders}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{Function} & \textbf{What it returns} \\
+\midrule
+\code{data_dir()}            & the data folder: \code{PM_AGENT_DATA_DIR} if set, else \code{data/sample} \\
+\code{list_portfolios()}     & portfolio names, e.g. \code{["sample_fund"]} \\
+\code{load_portfolio(name)}  & dict: name, display\_name, benchmark, cash, limits, positions (DataFrame) \\
+\code{load_benchmark(name)}  & DataFrame of ticker, weight \\
+\code{load_securities()}     & DataFrame of ticker, name, sector \\
+\code{load_prices()}         & DataFrame of date, ticker, close \\
+\code{available_dates()}     & sorted list of price dates \\
+\code{prices_on(date=None)}  & (date used, prices by ticker); defaults to the latest date \\
+\code{previous_date(date)}   & the price date before \code{date} (skips weekends) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Design decisions worth explaining:
+
+\begin{itemize}
+  \item \textbf{Helpful errors.} An unknown name or date raises \code{ValueError} with a list of
+        what \emph{is} available, for example ``No prices for 2026-10-17. Available dates:
+        2026-10-16, \ldots''. This is aimed at the AI: in M2 these messages are passed to the
+        model, which can read them and retry with a valid date. Good error messages are how
+        agents correct themselves.
+  \item \textbf{The env var is read on every call}, not once at import. Tests and evals change
+        \code{PM_AGENT_DATA_DIR} while running, and a value captured at import time would ignore
+        that.
+  \item \textbf{Dates stay as strings} (\code{"2026-10-22"}). pandas would otherwise convert them
+        to timestamps. \code{YYYY-MM-DD} strings sort correctly as text, compare simply, and are
+        what the AI sends and receives.
+  \item \textbf{\code{load_portfolio} returns a plain dict for now.} The \code{Portfolio} class
+        belongs to the analytics module (task 1.3), so it wasn't built early. In M1b this
+        function will return a \code{Portfolio}.
+  \item \textbf{A pandas Series for prices.} A Series is a one-column table with labels (here,
+        tickers), so \code{prices["NVDA"]} looks up a price directly.
+\end{itemize}
+
+\subsection{The tests}
+
+\code{tests/test_data.py} has 13 tests. Three examples:
+
+\begin{lstlisting}[style=py]
+def test_unknown_date_lists_available():
+    with pytest.raises(ValueError, match="No prices for 2026-10-17.*2026-10-16.*2026-10-22"):
+        data.prices_on("2026-10-17")
+\end{lstlisting}
+Checks that the error happens \emph{and} that its message lists the available dates.
+2026-10-17 is a Saturday, so it has no prices.
+
+\begin{lstlisting}[style=py]
+def test_previous_date():
+    assert data.previous_date("2026-10-22") == "2026-10-21"
+    assert data.previous_date("2026-10-19") == "2026-10-16"  # skips the weekend
+\end{lstlisting}
+``Previous date'' means the previous \emph{trading} day, not the previous calendar day.
+
+\begin{lstlisting}[style=py]
+def test_data_dir_override(tmp_path, monkeypatch):
+    ...write a tiny portfolio and prices file into tmp_path...
+    monkeypatch.setenv("PM_AGENT_DATA_DIR", str(tmp_path))
+    assert data.list_portfolios() == ["tiny"]
+\end{lstlisting}
+Uses two pytest fixtures: \code{tmp_path} (a throwaway folder) and \code{monkeypatch} (sets the
+environment variable for this test only). This proves the override works, which evals will rely
+on later.
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item Ran the generator twice and compared the outputs with \code{diff}: identical.
+  \item Checked the story on the generated files with a throwaway script (the table in
+        Section~\ref{sec:m1a-story}). The permanent version of this check is task 1.8 in M1b.
+  \item Watched the new tests fail before \code{data.py} existed, then pass after: 14 tests
+        passing in total.
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item Why plant a story in synthetic data instead of using real prices?
+  \item NVDA is 14\% of a \$50M fund and rises 10\% while the fund's NAV rises about 1.3\%. Why
+        does NVDA's weight rise to about 15.2\%, not exactly 15.4\%?
+  \item Why does selling \$1M of NVDA leave NAV unchanged?
+  \item What is a random seed, and why does the generator fix one?
+  \item Why does the generator walk prices \emph{backwards} from 10/21?
+  \item Why do \code{data.py}'s error messages list what is available? Who is the real audience
+        for those messages?
+  \item What would break if \code{data_dir()} read the environment variable only once, at import?
+\end{enumerate}
+\end{reviewq}
+
+\begin{takeaway}
+The synthetic data has a planted scenario so the agent's output can be scored against a
+known answer. Building it revealed that the spec's own numbers put the key test case within
+0.06 percentage points of a threshold, so the starting weight was adjusted to make the test
+robust, and the change was documented.
+\end{takeaway}
+
+% =====================================================================
+\appendix
+\section{Glossary}
+
+\begin{description}[style=sameline,leftmargin=3.2cm]
+  \item[Active weight] Portfolio weight minus benchmark weight.
+  \item[Agent] An LLM in a loop that can call tools until it reaches an answer.
+  \item[Benchmark] The index a fund is compared against.
+  \item[Breach] A limit exceeded.
+  \item[CI] Continuous integration: automatic tests on every push.
+  \item[DataFrame] A pandas table with named columns.
+  \item[Eval] A scored test suite for AI behaviour.
+  \item[Gross exposure] Long minus short: the total size of all bets.
+  \item[GICS] The standard scheme for classifying companies into sectors.
+  \item[Harness] The program around the model: loop, logging, limits.
+  \item[Hedge] A position taken to offset risk from another.
+  \item[LLM] Large language model.
+  \item[MCP] Model Context Protocol: a standard for exposing tools to AI.
+  \item[NAV] Net asset value: market values plus cash.
+  \item[Net exposure] Long plus short: the direction of the market bet.
+  \item[Seed] The starting value for a random number generator.
+  \item[Short] Selling borrowed shares; profits when the price falls.
+  \item[Tool use] A model asking the program to run a function.
+  \item[Warning] Close to a limit (90\% of it, or within 2 points for net).
+  \item[Weight] Market value divided by NAV.
+\end{description}
+
+\section{Command cheat sheet}
+
+\begin{lstlisting}[style=plain]
+python3 -m venv .venv               # create a virtual environment
+source .venv/bin/activate           # activate it (prompt shows (.venv))
+pip install -e ".[dev]"             # install the project + dev tools
+pytest -q                           # run all tests quietly
+pytest tests/test_data.py -v        # run one file, verbose
+python scripts/make_sample_data.py  # regenerate data/sample
+
+git status                          # what changed?
+git diff                            # show the changes
+git add -A && git commit -m "msg"   # snapshot everything
+git push                            # upload to GitHub
+git log --oneline                   # history, one line per commit
+gh run list                         # recent GitHub Actions runs
+\end{lstlisting}
+
+\end{document}
