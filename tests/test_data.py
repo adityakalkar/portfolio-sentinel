@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from pm_agent import data
+from pm_agent.analytics import Portfolio
 
 DATES = ["2026-10-16", "2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22"]
 
@@ -14,12 +15,13 @@ def test_list_portfolios():
 
 def test_load_portfolio():
     port = data.load_portfolio("sample_fund")
-    assert port["name"] == "sample_fund"
-    assert port["benchmark"] == "sample_large_cap"
-    assert port["cash"] > 0
-    assert port["limits"]["max_position"] == 0.15
-    assert list(port["positions"].columns) == ["ticker", "shares"]
-    assert len(port["positions"]) == 22
+    assert isinstance(port, Portfolio)
+    assert port.name == "sample_fund"
+    assert port.benchmark == "sample_large_cap"
+    assert port.cash > 0
+    assert port.limits["max_position"] == 0.15
+    assert len(port.positions) == 22
+    assert port.positions["INTC"] < 0  # the short
 
 
 def test_unknown_portfolio_lists_available():
@@ -87,5 +89,5 @@ def test_data_dir_override(tmp_path, monkeypatch):
     monkeypatch.setenv("PM_AGENT_DATA_DIR", str(tmp_path))
 
     assert data.list_portfolios() == ["tiny"]
-    assert data.load_portfolio("tiny")["benchmark"] is None
+    assert data.load_portfolio("tiny").benchmark is None
     assert data.available_dates() == ["2026-01-02"]

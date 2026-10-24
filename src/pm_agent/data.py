@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from pm_agent.analytics import Portfolio
+
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "sample"
 
 
@@ -26,25 +28,22 @@ def list_portfolios() -> list[str]:
     return sorted(p.stem for p in (data_dir() / "portfolios").glob("*.json"))
 
 
-def load_portfolio(name: str) -> dict:
-    """Portfolio as a dict: name, display_name, benchmark, cash, limits, positions.
-
-    positions is a DataFrame with columns ticker, shares (negative shares = short).
-    """
+def load_portfolio(name: str) -> Portfolio:
+    """The named portfolio, with positions as {ticker: shares} (negative shares = short)."""
     path = data_dir() / "portfolios" / f"{name}.json"
     if not path.exists():
         raise ValueError(
             f"Unknown portfolio '{name}'. Available: {', '.join(list_portfolios())}"
         )
     raw = json.loads(path.read_text())
-    return {
-        "name": name,
-        "display_name": raw["display_name"],
-        "benchmark": raw["benchmark"],
-        "cash": float(raw["cash"]),
-        "limits": raw["limits"],
-        "positions": pd.DataFrame(raw["positions"], columns=["ticker", "shares"]),
-    }
+    return Portfolio(
+        name=name,
+        display_name=raw["display_name"],
+        benchmark=raw["benchmark"],
+        cash=float(raw["cash"]),
+        limits=raw["limits"],
+        positions={p["ticker"]: p["shares"] for p in raw["positions"]},
+    )
 
 
 def list_benchmarks() -> list[str]:
