@@ -54,7 +54,7 @@
 
 \title{\textbf{Portfolio Sentinel}\\[0.3em]\large Design Document: concepts, architecture, and decisions}
 \author{Aditya Kalkar}
-\date{Last updated: 2026-10-23 (through milestone M1a)}
+\date{Last updated: 2026-10-23 (through milestone M1b)}
 
 \begin{document}
 \maketitle
@@ -144,7 +144,7 @@ Read it bottom-up:
 \begin{description}[style=nextline]
   \item[\code{data.py} (built in M1a)] The only code that reads files. It loads the
         portfolio, benchmark, securities list, and prices.
-  \item[\code{analytics.py} (M1b)] Pure math functions: weights, exposure, benchmark
+  \item[\code{analytics.py} (built in M1b)] Pure math functions: weights, exposure, benchmark
         comparison, limit checks, what-if trades. No files, no network, no AI.
   \item[MCP server (M2)] Wraps analytics as tools an AI can call. It converts decimals
         (0.142) to percentages (14.2) and rounds. It does no new math.
@@ -171,8 +171,8 @@ This is called \emph{separation of concerns}.
 Setup & Repo created; spec reviewed; 8 decisions agreed & Done \\
 M0  & Project skeleton (packaging, folders) and CI on GitHub & Done \\
 M1a & Synthetic sample data with a planted story; data loaders & Done \\
-M1b & Analytics core, written test-first & Next \\
-M2  & MCP server with 8 tools; connected to Claude Code & \\
+M1b & Analytics core, written test-first; sample data sanity tests & Done \\
+M2  & MCP server with 8 tools; connected to Claude Code & Next \\
 M3  & Hand-written agent loop, system prompt, run logging & \\
 M4  & Eval harness: test cases, scoring, results history & \\
 M5  & Morning brief, scenario evals, scheduling, delivery & \\
@@ -352,6 +352,20 @@ sensible warnings.
 subject, for example (\code{max_position}, NVDA). If a trade turns a breach into a warning on
 the same rule and stock, that counts as ``breach resolved,'' not a new flag.
 
+\textbf{Size, not sign} (added in M1b). The \code{max_*} limits are about how \emph{big} a bet
+is, whichever direction it points:
+\begin{itemize}
+  \item A short at $-16\%$ of NAV breaches a 15\% position limit just as a $+16\%$ long does.
+  \item Being $5.5\%$ \emph{underweight} a stock breaches a 5\% active limit just as being
+        $5.5\%$ overweight does. Not owning a stock the index owns is a bet too.
+\end{itemize}
+So the checks compare the absolute value, $|\text{value}|$, with the limit, but each flag
+reports the signed value, so a reader can tell a $-14\%$ short from a $+14\%$ long.
+
+\textbf{Exactly at the limit is a warning, not a breach.} ``Max 15\%'' means 15\% is allowed.
+A breach is strictly above the limit; a warning is at or above the warning line. For
+\code{min_net}, the direction flips: a breach is strictly below 90\%.
+
 \subsection{What-if trades}
 
 A \textbf{what-if} (or pre-trade) analysis asks: if I made this trade, what would the
@@ -361,6 +375,15 @@ unchanged, because \$1M of stock becomes \$1M of cash, but it lowers that stock'
 
 Simplifications we state openly: no transaction costs, no taxes, no settlement delay, and
 trades happen at the closing price.
+
+\textbf{Dollar trades mean fractional shares.} Selling \$1M of NVDA at \$198.00 is
+$1{,}000{,}000 / 198 = 5{,}050.505\ldots$ shares. Real trades are in whole shares, but for a
+``what would happen'' question the difference (under \$200 here) does not change the answer,
+and dollars are how PMs naturally phrase trades.
+
+In the industry this is called a \textbf{pre-trade compliance check}: before an order is sent,
+the system simulates it and checks the result against the fund's limits. Our
+\code{simulate_trades} tool (M2) is a small version of exactly that.
 
 \subsection{Returns}
 
@@ -501,6 +524,89 @@ consistent with itself.
 
 \textbf{Test-first (TDD).} Write the test, watch it fail, then write the code. Watching it fail
 proves the test actually checks something. A test that can never fail is worthless.
+
+\textbf{Parametrized tests} (added in M1b). \code{@pytest.mark.parametrize} runs one test
+function several times with different inputs, each reported as its own test:
+
+\begin{lstlisting}[style=py]
+@pytest.mark.parametrize("a_dollars, cash, expected", [
+    (89, 11, [("min_net", "breach")]),    # 89% < 90%
+    (91, 9,  [("min_net", "warning")]),   # within 2 points of 90%
+    (95, 5,  []),                         # comfortably inside
+])
+def test_limits_net_uses_fixed_buffer(a_dollars, cash, expected): ...
+\end{lstlisting}
+
+This is the natural shape for boundary rules: one row per side of each line.
+
+\textbf{Testing the tests (a mutation check).} Some tests pass the first time they run, for
+example sanity checks on data that is already correct. To prove such a test can fail,
+deliberately break the thing it guards (a \emph{mutation}), run it, watch it fail, and undo the
+break. In M1b we changed NVDA's 10/22 price in the data file, saw three sanity tests fail, and
+restored the file with \code{git checkout}.
+
+\subsection{Dataclasses and immutability}
+
+A \textbf{dataclass} is a Python class whose job is to hold data. The \code{@dataclass}
+decorator writes the boilerplate (the constructor, a readable printout, equality) from a list
+of typed fields:
+
+\begin{lstlisting}[style=py]
+@dataclass(frozen=True)
+class Portfolio:
+    name: str
+    positions: dict[str, float]   # ticker -> shares
+    cash: float
+    benchmark: str | None = None  # fields with defaults come last
+\end{lstlisting}
+
+\code{frozen=True} makes instances \textbf{immutable}: \code{port.cash = 0} raises an error.
+To get a changed copy you call \code{dataclasses.replace(port, cash=0)}, which builds a new
+object and leaves the old one alone. Immutability matters for what-if trades: the
+``before'' portfolio must stay exactly as it was so it can be compared with the ``after'' one.
+
+One catch: \code{frozen} stops you reassigning a field, but a \code{dict} inside is still
+mutable (\code{port.positions["NVDA"] = 0} would work). So code that changes positions must
+copy the dict first (\code{dict(port.positions)}), and \code{apply_trades} does.
+
+\subsection{pandas essentials used in the analytics}
+
+\begin{description}[style=nextline]
+  \item[Series] A one-column table with labels (the \textbf{index}). Prices are a Series
+        indexed by ticker, so \code{prices["NVDA"]} is NVDA's price.
+  \item[Index alignment] When you combine Series, pandas lines rows up by label, not by
+        position. \code{pd.DataFrame({"portfolio": held, "benchmark": bench})} produces one
+        row for every ticker in \emph{either} Series, with \code{NaN} (``not a number'',
+        meaning missing) where one side has no value. \code{.fillna(0.0)} turns those gaps
+        into zero weights. That one line handles both ``held but not in the benchmark'' and
+        ``in the benchmark but not held''.
+  \item[groupby] \code{w.groupby("sector")["long"].sum()} splits rows into groups by sector
+        and adds up each group, like a pivot table.
+  \item[clip] \code{weights.clip(lower=0)} replaces negatives with 0 (keeps only longs);
+        \code{clip(upper=0)} keeps only shorts.
+  \item[reindex] \code{table.reindex(new_labels, fill_value=0.0)} gives a table exactly
+        those rows, adding any missing ones filled with zeros.
+  \item[Stable sort] \code{sort_values(..., kind="stable")} keeps rows that tie in their
+        original order. Python's \code{sorted()} is always stable. We rely on this to list
+        breaches before warnings without scrambling the order within each group.
+\end{description}
+
+\subsection{Floating-point numbers}
+
+Computers store decimals in binary, so most are slightly off: \code{0.1 + 0.2} is
+\code{0.30000000000000004}. Two consequences in this project:
+
+\begin{itemize}
+  \item \textbf{Tests compare with a tolerance}: \code{pytest.approx}.
+  \item \textbf{``Is it zero?'' needs a tolerance too.} Selling a whole position computes
+        $\text{shares} - \text{dollars}/\text{price}$, which can leave a crumb such as
+        $10^{-13}$ shares instead of exactly 0. \code{math.isclose(shares, 0, abs_tol=1e-9)}
+        treats anything that small as zero, so the position is removed.
+\end{itemize}
+
+Limit checks do \emph{not} use a tolerance: a weight of 15.0000001\% is over 15\%. In
+practice, the data never sits that close to a line, which is what the ``clear room'' spec
+decision guarantees.
 
 \subsection{Git, GitHub, and secrets}
 
@@ -950,6 +1056,334 @@ known answer. Building it revealed that the spec's own numbers put the key test 
 robust, and the change was documented.
 \end{takeaway}
 
+% ---------------------------------------------------------------------
+\section{M1b: the analytics core}
+
+\subsection{Goal}
+
+Tasks 1.3 to 1.8: write \code{src/pm_agent/analytics.py}, the one place where portfolio math
+happens, test-first; then add sanity tests proving the sample data still tells its planted
+story. Everything the agent will ever say about numbers traces back to this file, so it has to
+be right and provably so.
+
+\subsection{What was built}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+\textbf{Task} & \textbf{Function} & \textbf{What it returns} \\
+\midrule
+1.3 & \code{Portfolio} & dataclass: name, positions (ticker $\to$ shares), cash, benchmark, limits \\
+1.3 & \code{position_weights} & table: ticker, shares, price, market value, weight; biggest first \\
+1.3 & \code{exposure_summary} & NAV, cash, long/short/gross/net exposure, position counts \\
+1.4 & \code{active_weights} & per stock in fund \emph{or} benchmark: portfolio, benchmark, active weight \\
+1.4 & \code{sector_exposure} & per sector: long, short, net, gross (+ benchmark, active) \\
+1.5 & \code{check_limits} & list of flags, breaches first; \code{[]} means all clear \\
+1.6 & \code{compare_flags} & which flags a change resolved and which it created \\
+1.6 & \code{apply_trades} & a \emph{new} Portfolio after dollar trades \\
+1.7 & \code{weight_changes} & per position: start/end weight, change, price return \\
+1.8 & (tests only) & \code{tests/test_sample_data.py}: the planted story holds \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Also: \code{data.load_portfolio} now returns a \code{Portfolio} instead of a plain dict, as
+promised in M1a.
+
+\textbf{Test counts.} 57 tests in total: 34 known-answer tests in \code{tests/test_analytics.py},
+9 sanity tests in \code{tests/test_sample_data.py}, and the 14 from earlier milestones.
+
+\subsection{The shape of every function}
+
+Every analytics function takes its inputs as arguments and returns a value. Nothing is loaded
+inside. The inputs are always the same few kinds of thing:
+
+\begin{lstlisting}[style=py]
+portfolio: Portfolio      # what we hold
+prices:    pd.Series      # ticker -> close on one date
+sectors:   pd.Series      # ticker -> sector name
+benchmark: pd.Series      # ticker -> benchmark weight
+\end{lstlisting}
+
+This is what ``pure'' buys us. A test can build a three-stock portfolio with \$1 prices in two
+lines and check the answer by hand, with no files at all:
+
+\begin{lstlisting}[style=py]
+port = Portfolio(name="t", positions={"LONG": 10, "SHORT": -2}, cash=20)
+s = exposure_summary(port, prices(LONG=10, SHORT=10))
+assert s["gross_exposure"] == pytest.approx(1.20)   # $100 long, $20 short, NAV $100
+assert s["net_exposure"] == pytest.approx(0.80)
+\end{lstlisting}
+
+The M2 server will do the wiring: load with \code{data.py}, call analytics, convert to percent.
+
+\textbf{Which module depends on which.} \code{Portfolio} is defined in \code{analytics.py}, and
+\code{data.py} imports it to build one from JSON. Analytics imports nothing from the project,
+so it stays pure and can be tested on its own. The arrow only points one way:
+\code{data} $\to$ \code{analytics}.
+
+\subsection{Weights and exposure (1.3)}
+
+\begin{lstlisting}[style=py]
+def position_weights(portfolio, prices):
+    missing = sorted(t for t in portfolio.positions if t not in prices.index)
+    if missing:
+        raise ValueError(f"No price for {', '.join(missing)} on this date")
+    rows = pd.DataFrame({"ticker": list(portfolio.positions),
+                         "shares": list(portfolio.positions.values())})
+    rows["price"] = rows["ticker"].map(prices).astype(float)
+    rows["market_value"] = rows["shares"] * rows["price"]
+    nav = rows["market_value"].sum() + portfolio.cash
+    rows["weight"] = rows["market_value"] / nav
+    ...sort by absolute market value, biggest first...
+\end{lstlisting}
+
+Line by line: check every holding has a price (fail loudly, naming the missing tickers,
+rather than silently treating a missing price as \$0); look up each price with \code{.map};
+market value is shares times price; NAV is the sum plus cash; weight is value over NAV.
+Sorting by \emph{absolute} value puts a big short near the top, where a reader expects it.
+
+\code{exposure_summary} builds on it: long is the sum of positive weights, short the sum of
+negative ones, then gross $=$ long $-$ short and net $=$ long $+$ short.
+
+On the sample fund on 2026-10-22 it gives NAV \$50{,}646{,}833, long 97.97\%, short
+$-1.92\%$, gross 99.88\%, net 96.05\%, with 21 longs and 1 short.
+
+\subsection{Benchmark comparison (1.4)}
+
+\code{active_weights} relies on pandas \emph{index alignment} (Part~I):
+
+\begin{lstlisting}[style=py]
+held = position_weights(portfolio, prices).set_index("ticker")["weight"]
+table = pd.DataFrame({"portfolio_weight": held, "benchmark_weight": benchmark})
+table = table.fillna(0.0)
+table["active_weight"] = table["portfolio_weight"] - table["benchmark_weight"]
+\end{lstlisting}
+
+Putting two Series side by side gives one row per ticker in either. A stock only the fund holds
+(AMD) gets a benchmark weight of 0, so its whole weight is active. A stock only the benchmark
+holds (ORCL) gets a portfolio weight of 0, so it is underweight by its full benchmark weight.
+The result is sorted by absolute active weight: biggest bets first, in either direction.
+
+\code{sector_exposure} splits each weight into its long and short part with \code{clip}, adds
+them up by sector with \code{groupby}, and derives net and gross. With a benchmark, it also adds
+up the benchmark's weights by sector and computes active $=$ net $-$ benchmark. A sector that
+only the benchmark holds still gets a row (all zeros for the fund), because being absent from a
+sector is a sector bet.
+
+Known-answer test, a sector with a short: Tech holds A at $+50\%$ and C short at $-10\%$, so
+Tech long $= 50\%$, short $= -10\%$, net $= 40\%$, gross $= 60\%$.
+
+\subsection{Limit checks (1.5)}
+
+\code{check_limits} works in three steps.
+
+\textbf{1. Validate the limits.} Unknown keys raise an error listing the known ones. A typo
+such as \code{max_positon} would otherwise be silently ignored, and a limit you think is
+being checked would not be. The active-weight rules also require a benchmark (and the sector
+rule requires sectors); if one is missing, that is an error too, for the same reason.
+
+\textbf{2. Collect every \code{max_*} check, then rate each one} with one small helper:
+
+\begin{lstlisting}[style=py]
+def _max_rule_status(value, limit, warn_at):
+    size = abs(value)
+    if size > limit:
+        return "breach"
+    if size >= warn_at * limit:
+        return "warning"
+    return None
+\end{lstlisting}
+
+Position weights, stock active weights, sector active weights and gross exposure all go
+through this same function, so the warning rule is written exactly once.
+
+\textbf{3. Net rules use the fixed buffer instead.} \code{min_net} breaches below 90\% and warns
+up to 92\%; \code{max_net} breaches above 102\% and warns from 100\%.
+
+Finally, flags are sorted with breaches first. Because Python's \code{sorted} is stable, the
+order within each group is the order the checks ran in (positions, then stock active, sector
+active, gross, net), and within a rule the biggest first.
+
+\textbf{Worked example} (from the tests). NAV \$100 with A $= 16\%$, B $= -14\%$ (short),
+C $= 10\%$; position limit 15\%, warning line 13.5\%:
+
+\begin{center}
+\begin{tabular}{@{}lrll@{}}
+\toprule
+\textbf{Ticker} & \textbf{Weight} & \textbf{Compared size} & \textbf{Status} \\
+\midrule
+A & $16\%$  & $16\% > 15\%$ & breach \\
+B & $-14\%$ & $14\% \ge 13.5\%$ & warning (shorts count by size) \\
+C & $10\%$  & $10\% < 13.5\%$ & no flag \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{The net buffer, tested at every edge}, with \code{warn_at} $= 0.9$ deliberately also set
+to prove net ignores it:
+
+\begin{center}
+\begin{tabular}{@{}rl@{}}
+\toprule
+\textbf{Net} & \textbf{Result} \\
+\midrule
+89\%  & \code{min_net} breach \\
+91\%  & \code{min_net} warning \\
+95\%  & no flag (with \code{warn_at}, it would be a \code{max_net} warning: $95 \ge 91.8$) \\
+101\% & \code{max_net} warning \\
+103\% & \code{max_net} breach \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{What-if trades and flag comparison (1.6)}
+
+\begin{lstlisting}[style=py]
+def apply_trades(portfolio, prices, trades):
+    positions = dict(portfolio.positions)  # a copy, so the original is never modified
+    cash = portfolio.cash
+    for trade in trades:
+        ticker, dollars = trade["ticker"], trade["dollars"]
+        if ticker not in prices.index:
+            raise ValueError(f"Unknown ticker '{ticker}'. Tickers with prices: ...")
+        shares = float(positions.get(ticker, 0) + dollars / prices[ticker])
+        if math.isclose(shares, 0, abs_tol=1e-9):
+            positions.pop(ticker, None)
+        else:
+            positions[ticker] = shares
+        cash -= dollars
+    return replace(portfolio, positions=positions, cash=cash)
+\end{lstlisting}
+
+The whole function is ``shares change by dollars over price, cash changes by minus dollars''.
+\code{positions.get(ticker, 0)} means a ticker not yet held starts at 0 shares, so the same
+line both adds to a position and opens a new one. Selling more than you hold leaves negative
+shares: a short, consistent with the conventions. The copy-then-\code{replace} pattern is what
+guarantees the original portfolio is untouched (Part~I, dataclasses), and a test checks it.
+
+\code{compare_flags(before, after)} implements the spec's flag identity rules. It indexes both
+lists by \code{(rule, subject)} and then:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Before} & \textbf{After} & \textbf{Counted as} \\
+\midrule
+breach  & warning  & resolved \\
+any     & (no flag) & resolved \\
+warning & breach   & new \\
+(no flag) & any    & new \\
+same status & same status & neither \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The headline test, ``trimming fixes a breach'': A is 16\% of a \$100 fund; selling \$2 brings it
+to 14\%. That is still a warning, but \code{compare_flags} reports the breach as resolved and
+nothing as new.
+
+\subsection{Weight changes (1.7)}
+
+\code{weight_changes} holds the shares fixed, computes weights on two dates, and subtracts. It
+also returns each stock's price return. The known-answer test: two \$50 positions, no cash; A's
+price doubles, so A is now \$100 of \$150. Weights go from 50/50 to 66.7/33.3, although nobody
+traded. This is drift (Part~I).
+
+\subsection{Sample data sanity tests (1.8)}
+
+\code{tests/test_sample_data.py} checks the real sample files, end to end through
+\code{data.py} and analytics:
+
+\begin{itemize}
+  \item The benchmark sums to 1. Every held or benchmark ticker has a sector and a price on
+        every date.
+  \item On each of 10/16, 10/19, 10/20 and 10/21, the \emph{exact} flag list is one NVDA
+        position warning. On 10/22 it is exactly one NVDA breach (15.20\%). No other limit
+        trips anywhere (spec decision 4).
+  \item 10/22 price moves: NVDA $+10\%$, UNH $-8\%$ (the biggest loser), AMD $+4\%$, INTC
+        $-3\%$; NVDA has the biggest weight drift.
+  \item Selling \$1M of NVDA on 10/22 brings it to 13.23\%, at least 0.2 points under the
+        13.5\% warning line; afterwards there are no flags at all, and \code{compare_flags}
+        reports exactly one resolved breach and nothing new.
+\end{itemize}
+
+An \code{autouse} fixture removes \code{PM_AGENT_DATA_DIR} for these tests, so they always
+check the checked-in sample data even if the variable is set in the shell.
+
+\subsection{Decisions and why}
+
+\begin{enumerate}
+  \item \textbf{Analytics takes data as arguments (Series), not names or paths.} This keeps it
+        pure and makes known-answer tests tiny. The alternative, having analytics call
+        \code{data.py}, would mean every test needs data files.
+  \item \textbf{Positions are a plain \code{dict} (ticker $\to$ shares), not a DataFrame.}
+        Easier to read, to build in tests, and to change in \code{apply_trades}. Tables are
+        built from it when needed.
+  \item \textbf{Flags carry the signed value.} The check uses the size, but the reader needs
+        the direction ($-14\%$ short versus $+14\%$ long; underweight versus overweight).
+  \item \textbf{Exactly at the limit is a warning.} ``Max 15\%'' allows 15\%. The test for D
+        (active exactly $-5\%$) pins this down.
+  \item \textbf{Missing settings disable the warning band.} If \code{warn_at} is absent it
+        defaults to 1.0 (warn only at exactly the limit); if \code{net_warn_buffer} is absent,
+        0. No made-up thresholds appear that the portfolio file did not ask for.
+  \item \textbf{A configured active limit with no benchmark is an error}, not silently
+        skipped. Silently skipping a configured limit is the most dangerous possible
+        failure for a risk check.
+  \item \textbf{\code{compare_flags} lives in analytics.} The spec puts resolved/new flags in
+        the \code{simulate_trades} tool output, but the comparison is logic, and the MCP layer
+        must not contain logic (architecture rule 4). It was not named in the task list, so it
+        was added in 1.6, where its first test (``trimming fixes a breach'') lives.
+  \item \textbf{Sort orders.} Positions by absolute value, active weights and weight changes by
+        absolute change, sectors by gross exposure (largest first). ``Biggest first'' is what
+        a PM scans for, and it lets \code{top_n} in M2 simply take the first rows.
+  \item \textbf{Fractional shares from dollar trades}, with a float-tolerance check so a fully
+        sold position is removed rather than left at $10^{-13}$ shares.
+  \item \textbf{Shares are stored as plain \code{float}}, not numpy numbers, so they convert
+        cleanly to JSON at the MCP boundary later.
+\end{enumerate}
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item For each of 1.3 to 1.7: wrote the tests, ran them and watched them fail (the function
+        did not exist yet), implemented it, and watched them pass.
+  \item For 1.8, the sanity tests passed on first run because the data was already right, so
+        a mutation check was done (Part~I): NVDA's 10/22 price was changed from \$198.00 to
+        \$190.00, three tests failed, and the file was restored with \code{git checkout}.
+  \item Ran the analytics on the real sample data before writing the sanity tests, to see the
+        actual flags on every date (they matched the M1a story table exactly).
+  \item Full suite: 57 passed.
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item Why does \code{check_limits} compare $|\text{value}|$ with the limit, but report the
+        signed value?
+  \item A position is at exactly 15.0\% with a 15\% limit. Breach, warning, or neither? Why?
+  \item Why do net limits use a fixed 2-point buffer instead of \code{warn_at}? Give the net
+        exposure that shows the difference.
+  \item What does \code{.fillna(0.0)} do in \code{active_weights}, and which two situations does
+        it handle?
+  \item \code{Portfolio} is frozen. Why must \code{apply_trades} still copy the positions dict?
+  \item A trade turns an NVDA breach into an NVDA warning. Is that a resolved flag, a new flag,
+        or neither? What if a warning turns into a breach?
+  \item Why is \code{compare_flags} in \code{analytics.py} and not in the MCP server?
+  \item Why might a sanity test that passes on its first run still be worthless, and how do you
+        check it is not?
+  \item What could go wrong if \code{check_limits} silently skipped unknown limit keys?
+\end{enumerate}
+\end{reviewq}
+
+\begin{takeaway}
+All the portfolio math now lives in one pure, tested module. Every rule from the spec has a
+known-answer test small enough to check by hand, including the edges (exactly at a limit, shorts,
+stocks missing from one side, the net buffer). Wherever a mistake could hide a risk, such as a
+misspelled limit or a missing benchmark, the code raises an error instead of guessing.
+Sanity tests then pin the planted story to the real sample data, and a deliberate mutation
+showed that those tests catch a broken story.
+\end{takeaway}
+
 % =====================================================================
 \appendix
 \section{Glossary}
@@ -960,18 +1394,26 @@ robust, and the change was documented.
   \item[Benchmark] The index a fund is compared against.
   \item[Breach] A limit exceeded.
   \item[CI] Continuous integration: automatic tests on every push.
+  \item[Dataclass] A Python class that just holds typed fields; \code{frozen} makes it immutable.
   \item[DataFrame] A pandas table with named columns.
   \item[Eval] A scored test suite for AI behaviour.
+  \item[Flag identity] A flag's (rule, subject) pair, used to compare flags before and after a trade.
   \item[Gross exposure] Long minus short: the total size of all bets.
   \item[GICS] The standard scheme for classifying companies into sectors.
   \item[Harness] The program around the model: loop, logging, limits.
   \item[Hedge] A position taken to offset risk from another.
+  \item[Immutable] Cannot be changed after creation; changes make a new copy.
+  \item[Index alignment] pandas matching rows by label when combining tables.
   \item[LLM] Large language model.
   \item[MCP] Model Context Protocol: a standard for exposing tools to AI.
+  \item[Mutation check] Breaking code or data on purpose to prove a test can fail.
   \item[NAV] Net asset value: market values plus cash.
   \item[Net exposure] Long plus short: the direction of the market bet.
+  \item[Pre-trade check] Simulating a trade and checking limits before placing it.
+  \item[Pure function] Output depends only on inputs; no files, network, or side effects.
   \item[Seed] The starting value for a random number generator.
   \item[Short] Selling borrowed shares; profits when the price falls.
+  \item[Stable sort] A sort that keeps tied items in their original order.
   \item[Tool use] A model asking the program to run a function.
   \item[Warning] Close to a limit (90\% of it, or within 2 points for net).
   \item[Weight] Market value divided by NAV.

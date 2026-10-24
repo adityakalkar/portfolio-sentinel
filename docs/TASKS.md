@@ -26,22 +26,22 @@ criteria pass and the change has been reviewed.
 - [x] **1.2 `data.py` loaders** — portfolios, benchmarks, securities, prices, `prices_on(date)`,
   `available_dates()`, `previous_date()`, `list_portfolios()`; `PM_AGENT_DATA_DIR` override.
   - **Done when:** unknown portfolio/date raise `ValueError` listing what is available (tested).
-- [ ] **1.3 Weights and exposure** — `Portfolio` dataclass, `position_weights`,
+- [x] **1.3 Weights and exposure** — `Portfolio` dataclass, `position_weights`,
   `exposure_summary` (NAV, long, short, gross, net, cash weight, counts).
   - **Done when:** known-answer tests pass, including a short position case
     ($100 long, $20 short, $20 cash → gross 120%, net 80%) and a missing-price error.
-- [ ] **1.4 Benchmark comparison** — `active_weights`, `sector_exposure` (long/short/net/gross,
+- [x] **1.4 Benchmark comparison** — `active_weights`, `sector_exposure` (long/short/net/gross,
   plus benchmark and active when a benchmark is given).
   - **Done when:** tests cover names held but not in the benchmark, benchmark names not held,
     and a sector containing a short.
-- [ ] **1.5 Limits** — `check_limits` per SPEC §6.
+- [x] **1.5 Limits** — `check_limits` per SPEC §6.
   - **Done when:** tests cover breach, warning, all-clear, the net buffer rule, and unknown keys.
-- [ ] **1.6 What-if trades** — `apply_trades` (returns a new portfolio; original unchanged).
+- [x] **1.6 What-if trades** — `apply_trades` (returns a new portfolio; original unchanged).
   - **Done when:** tests cover buying more, opening a new position, fully closing one, cash
     movement, unknown ticker error, and "trimming fixes a breach".
-- [ ] **1.7 Weight changes** — `weight_changes(portfolio, prices_start, prices_end)`.
+- [x] **1.7 Weight changes** — `weight_changes(portfolio, prices_start, prices_end)`.
   - **Done when:** a "price doubles" test passes (50/50 → 66.7/33.3).
-- [ ] **1.8 Sample data sanity tests** — benchmark sums to 1; every ticker has a sector and a
+- [x] **1.8 Sample data sanity tests** — benchmark sums to 1; every ticker has a sector and a
   price on every date; the planted story holds (NVDA warning on 10-21, breach on 10-22).
   Checks the **exact** set of flags per SPEC §5 (only the NVDA warning on 10-21), and that a
   $1M NVDA sale on 10-22 lands clearly below the 13.5% warning line.
