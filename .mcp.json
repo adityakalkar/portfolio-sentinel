@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "pm-agent": {
+      "type": "stdio",
+      "command": ".venv/bin/python",
+      "args": [
+        "-m",
+        "pm_agent.mcp_server"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -237,7 +237,8 @@ def test_limits_sector_active():
 
 def test_limits_unknown_key_errors():
     port = limits_port({"A": 10}, cash=90, max_positon=0.15)  # typo
-    with pytest.raises(ValueError, match="Unknown limit key.*max_positon.*Known keys.*max_position"):
+    expected = "Unknown limit key.*max_positon.*Known keys.*max_position"
+    with pytest.raises(ValueError, match=expected):
         check_limits(port, one_dollar(port))
 
 

@@ -60,9 +60,19 @@ def load_benchmark(name: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def benchmark_weights(name: str) -> pd.Series:
+    """Benchmark weights as a Series indexed by ticker (the shape analytics expects)."""
+    return load_benchmark(name).set_index("ticker")["weight"]
+
+
 def load_securities() -> pd.DataFrame:
     """Security master: columns ticker, name, sector."""
     return pd.read_csv(data_dir() / "securities.csv")
+
+
+def sector_map() -> pd.Series:
+    """Sector for every known ticker, as a Series indexed by ticker."""
+    return load_securities().set_index("ticker")["sector"]
 
 
 def load_prices() -> pd.DataFrame:

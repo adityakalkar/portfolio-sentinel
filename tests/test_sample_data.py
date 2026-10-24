@@ -27,12 +27,12 @@ def fund():
 
 @pytest.fixture
 def sectors() -> pd.Series:
-    return data.load_securities().set_index("ticker")["sector"]
+    return data.sector_map()
 
 
 @pytest.fixture
 def benchmark(fund) -> pd.Series:
-    return data.load_benchmark(fund.benchmark).set_index("ticker")["weight"]
+    return data.benchmark_weights(fund.benchmark)
 
 
 def flags_on(date, fund, sectors, benchmark):

@@ -91,3 +91,22 @@ def test_data_dir_override(tmp_path, monkeypatch):
     assert data.list_portfolios() == ["tiny"]
     assert data.load_portfolio("tiny").benchmark is None
     assert data.available_dates() == ["2026-01-02"]
+
+
+def test_sector_map():
+    sectors = data.sector_map()
+    assert isinstance(sectors, pd.Series)
+    assert sectors["NVDA"] == "Information Technology"
+    assert sectors["KO"] == "Consumer Staples"  # benchmark-only names are included
+
+
+def test_benchmark_weights():
+    weights = data.benchmark_weights("sample_large_cap")
+    assert isinstance(weights, pd.Series)
+    assert weights["NVDA"] == pytest.approx(0.12)
+    assert weights.sum() == pytest.approx(1.0)
+
+
+def test_benchmark_weights_unknown_lists_available():
+    with pytest.raises(ValueError, match="Unknown benchmark 'nope'.*sample_large_cap"):
+        data.benchmark_weights("nope")
