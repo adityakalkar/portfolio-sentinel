@@ -69,12 +69,13 @@ Differences that matter here:
   how you verified it, and anything you weren't sure about.
 - **Design document (required):** at the end of every milestone in `docs/TASKS.md` (M0, M1,
   M2, ...), or of a group of its tasks done together (so far: M1a = tasks 1.1–1.2,
-  M1b = 1.3–1.8), update `docs/design/design_doc.tex` before calling it done. Add a
-  section to Part II (goal, what was built, how the code works with short excerpts, decisions
-  and why, how it was verified, review questions, a key takeaway), extend the Part I primers
-  with any new background concept (finance, AI/agents, MCP, Python, Git/GitHub/CI), and
-  update the milestone map, glossary, and "Last updated" date. Write for a reader new to the
-  project: explain generously, with context, background, and worked examples.
+  M1b = 1.3–1.8, M2a = 2.1, M2b = 2.2–2.3), update `docs/design/design_doc.tex` before
+  calling it done. Add a section to Part II (goal, what was built, how the code works with
+  short excerpts, decisions and why, how it was verified, review questions, a key takeaway),
+  extend the Part I primers with any new background concept (finance, AI/agents, MCP,
+  Python, Git/GitHub/CI), and update the milestone map, glossary, and "Last updated" date.
+  Write for a reader new to the project: explain generously, with context, background, and
+  worked examples.
 - Commit in small steps with clear messages when asked to commit.
 - **Stop and ask** if the spec is ambiguous, a change would break an architecture rule, or you
   want to add a dependency.

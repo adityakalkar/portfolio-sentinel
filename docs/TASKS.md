@@ -48,16 +48,16 @@ criteria pass and the change has been reviewed.
 
 ## M2 — MCP server
 
-- [ ] **2.1 Server and tools** — `src/pm_agent/mcp_server.py` with the 8 tools in SPEC §7,
+- [x] **2.1 Server and tools** — `src/pm_agent/mcp_server.py` with the 8 tools in SPEC §7,
   structured output, read-only annotations, `ValueError` → `ToolError`.
   - **Done when:** tests using the in-process `Client` check that all 8 tools are listed with
     descriptions, `check_limits` returns the NVDA breach in percent, a simulated $1M NVDA sale
     resolves it, and a bad portfolio name returns a readable error.
-- [ ] **2.2 Connect to Claude Code** — add the server to Claude Code with project scope and
+- [x] **2.2 Connect to Claude Code** — add the server to Claude Code with project scope and
   try it by chatting.
   - **Done when:** `claude mcp list` shows it connected and Claude Code answers
     "are we breaching any limits?" correctly using the tools.
-- [ ] **2.3 Tool description pass** — rewrite any tool description that made Claude Code pick
+- [x] **2.3 Tool description pass** — rewrite any tool description that made Claude Code pick
   the wrong tool or ask for clarification during 2.2. Note what you changed in `docs/NOTES.md`.
 
 ## M3 — The agent (harness)

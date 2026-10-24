@@ -54,7 +54,7 @@
 
 \title{\textbf{Portfolio Sentinel}\\[0.3em]\large Design Document: concepts, architecture, and decisions}
 \author{Aditya Kalkar}
-\date{Last updated: 2026-10-23 (through milestone M1b)}
+\date{Last updated: 2026-10-24 (through milestone M2)}
 
 \begin{document}
 \maketitle
@@ -146,7 +146,7 @@ Read it bottom-up:
         portfolio, benchmark, securities list, and prices.
   \item[\code{analytics.py} (built in M1b)] Pure math functions: weights, exposure, benchmark
         comparison, limit checks, what-if trades. No files, no network, no AI.
-  \item[MCP server (M2)] Wraps analytics as tools an AI can call. It converts decimals
+  \item[MCP server (built in M2a)] Wraps analytics as tools an AI can call. It converts decimals
         (0.142) to percentages (14.2) and rounds. It does no new math.
   \item[Agent (M3)] A loop we write by hand: send the question and tool list to Claude;
         if Claude asks for a tool, run it through MCP and send back the result; repeat until
@@ -172,8 +172,9 @@ Setup & Repo created; spec reviewed; 8 decisions agreed & Done \\
 M0  & Project skeleton (packaging, folders) and CI on GitHub & Done \\
 M1a & Synthetic sample data with a planted story; data loaders & Done \\
 M1b & Analytics core, written test-first; sample data sanity tests & Done \\
-M2  & MCP server with 8 tools; connected to Claude Code & Next \\
-M3  & Hand-written agent loop, system prompt, run logging & \\
+M2a & MCP server with 8 tools (task 2.1), tested in-process and over stdio & Done \\
+M2b & Connected to Claude Code; tool description pass (tasks 2.2, 2.3) & Done \\
+M3  & Hand-written agent loop, system prompt, run logging & Next \\
 M4  & Eval harness: test cases, scoring, results history & \\
 M5  & Morning brief, scenario evals, scheduling, delivery & \\
 M6  & Real data (ETF holdings, SEC 13F filings, prices) & \\
@@ -447,6 +448,76 @@ every pair of app and tool.
 Because we use the standard, the same server works in Claude Code (M2) and in our own agent
 (M3) with no changes.
 
+\subsection{Inside an MCP tool (added in M2a)}
+
+When a client connects, it asks the server for its tool list (\code{list_tools}). For each
+tool, the server sends back four things:
+
+\begin{description}[style=nextline]
+  \item[Name] e.g. \code{check_limits}. The model uses it to ask for the tool.
+  \item[Description] Plain text explaining what the tool is for. This is the \emph{only}
+        thing the model reads when deciding which tool fits a question, so a vague
+        description means wrong tool choices. Ours always end with an example question.
+  \item[Input schema] A \textbf{JSON Schema}: a standard JSON description of the arguments,
+        their types and which are required, e.g. ``\code{trades} is an array of objects, each
+        with a string \code{ticker} and a number \code{dollars}''. The SDK builds it
+        automatically from the Python type hints.
+  \item[Annotations] Hints about behaviour. \code{read_only_hint=True} tells the client
+        the tool changes nothing, so it is safe to call without asking the user.
+\end{description}
+
+The server can also send \textbf{instructions} once, at connection time: general guidance
+for the model that applies to every tool. Ours explain the units (\code{_pct} is percent of
+NAV, \code{_usd} is dollars, negative means short) and say to report numbers exactly as given.
+
+\textbf{Structured output.} A tool can return plain text, or \textbf{structured content}: a
+JSON object with named fields, such as \code{{"value_pct": 15.2, "status": "breach"}}.
+Named fields are easier for a model to read correctly than prose, and easy for tests to
+check. In MCP SDK v2, a tool gets structured output by declaring its return type as
+\code{dict[str, Any]}.
+
+\textbf{Errors.} If a tool raises \code{ToolError("No prices for 2026-10-17. Available
+dates: ...")}, the client receives that message marked as an error, and the model can read it
+and retry. Any \emph{other} exception is hidden: the client only sees ``Error executing tool
+check\_limits''. This is a security default (internal error messages can leak details), so we
+convert our own \code{ValueError}s, whose messages are written for the model, into
+\code{ToolError}s on purpose.
+
+\textbf{Testing a server.} The SDK's \code{Client} can connect to a server object directly
+in the same Python process (\emph{in-process}), with no subprocess and no pipes. Tests run
+fast and go through the real protocol. One test also starts the server as a subprocess over
+stdio, which is exactly how Claude Code will run it.
+
+\subsection{Connecting a client: configuration and trust (added in M2b)}
+
+A client needs to know \emph{how to start} a stdio server: which command to run, with which
+arguments. Claude Code stores this in one of three \textbf{scopes}:
+
+\begin{description}[style=nextline]
+  \item[Local] Only you, only this project (stored in your user settings).
+  \item[Project] Everyone who works on this repo: a file called \code{.mcp.json} in the repo
+        root, committed with the code. This is what we use.
+  \item[User] Only you, but in every project on your machine.
+\end{description}
+
+Our \code{.mcp.json}:
+
+\begin{lstlisting}[style=plain]
+{"mcpServers": {"pm-agent": {"type": "stdio",
+                             "command": ".venv/bin/python",
+                             "args": ["-m", "pm_agent.mcp_server"]}}}
+\end{lstlisting}
+
+The command is a \emph{relative} path, so it works for anyone who clones the repo and creates
+the virtual environment in the usual place.
+
+\textbf{Trust.} An MCP server is a program running on your machine, so it can do anything
+you can do. Claude Code therefore asks before starting a project server for the first time,
+and asks again before each tool call unless you allow it. The prompt offers ``use this and all
+future MCP servers in this project''. We did not choose that: the repo is public, so a pull
+request could add a server to \code{.mcp.json}, and auto-approval would start it without
+asking. Approving servers one at a time is safer.
+
 \subsection{Evals}
 
 An \textbf{eval} is a test suite for AI behaviour: a set of questions with known correct
@@ -607,6 +678,48 @@ Computers store decimals in binary, so most are slightly off: \code{0.1 + 0.2} i
 Limit checks do \emph{not} use a tolerance: a weight of 15.0000001\% is over 15\%. In
 practice, the data never sits that close to a line, which is what the ``clear room'' spec
 decision guarantees.
+
+\subsection{Decorators, context managers, TypedDict, and asyncio (added in M2a)}
+
+\begin{description}[style=nextline]
+  \item[Decorator] A function that takes a function and returns it (possibly registered or
+        wrapped). Writing \code{@tool} above \code{def check_limits(...)} is shorthand for
+        \code{check_limits = tool(check_limits)}. Our \code{tool} decorator registers the
+        function with the MCP server and returns it unchanged.
+  \item[Context manager] An object used with \code{with}, which runs setup before a block
+        and cleanup (or error handling) after it, even if the block raises. Ours,
+        \code{readable_errors()}, catches a \code{ValueError} raised anywhere inside the
+        block and re-raises it as a \code{ToolError}. \code{@contextmanager} lets you write
+        one as a generator: code before \code{yield} runs on entry, and a \code{try}
+        around the \code{yield} sees errors from the block.
+  \item[TypedDict] A type hint for a dict with known keys, e.g. a trade must have a
+        \code{ticker} (string) and \code{dollars} (number). At runtime it is an ordinary
+        dict; the benefit is that tools (here, the MCP SDK building a JSON Schema) can read
+        the expected keys. It is part of Python's standard library, so it adds no dependency.
+  \item[async / await and asyncio] MCP clients are \emph{asynchronous}: functions declared
+        \code{async def} can pause while waiting for messages (\code{await}) and let other
+        work run. \code{asyncio.run(main())} starts an event loop, runs \code{main} to the
+        end, and returns its result. Our tests wrap each client call in \code{asyncio.run},
+        so the test functions themselves stay ordinary (no async test plugin needed).
+\end{description}
+
+\subsection{The shell PATH (added in M2b)}
+
+When you type a command such as \code{claude}, the shell (zsh on macOS) looks for a program
+with that name in each folder listed in the \textbf{PATH} environment variable, in order.
+If none has it, you get ``command not found'', even when the program is installed.
+
+That happened in M2b. The Claude Code installer put \code{claude} in \code{~/.local/bin},
+but \code{~/.zshrc} (the script zsh runs at startup) set PATH to a fixed list that did not
+include that folder. The fix adds the folder at the front, keeping everything else:
+
+\begin{lstlisting}[style=plain]
+export PATH="$HOME/.local/bin:$PATH"
+\end{lstlisting}
+
+\code{$PATH} expands to the current value, so this \emph{prepends} rather than replaces.
+Writing \code{export PATH="/a:/b"} with no \code{$PATH} is what caused the problem: it throws
+away anything added earlier.
 
 \subsection{Git, GitHub, and secrets}
 
@@ -1384,6 +1497,345 @@ Sanity tests then pin the planted story to the real sample data, and a deliberat
 showed that those tests catch a broken story.
 \end{takeaway}
 
+% ---------------------------------------------------------------------
+\section{M2a: the MCP server}
+
+\subsection{Goal}
+
+Task 2.1: wrap the analytics as 8 MCP tools (SPEC~\S7) so that any MCP client (Claude Code
+in task 2.2, our own agent in M3) can ask portfolio questions and get exact numbers back.
+Every tool is read-only, returns structured output, and turns bad input into an error message
+the model can read and act on.
+
+\subsection{What was built}
+
+\code{src/pm_agent/mcp_server.py}, plus two small loaders in \code{data.py}
+(\code{benchmark_weights(name)} and \code{sector_map()}, which return the Series shape the
+analytics functions take).
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+\textbf{Tool} & \textbf{Calls (analytics)} & \textbf{Example question} \\
+\midrule
+\code{list_portfolios}        & (data only)         & Which funds can I look at? \\
+\code{get_portfolio_summary}  & \code{exposure_summary} & What's our NAV and net exposure? \\
+\code{get_positions}          & \code{position_weights} & What are our five biggest positions? \\
+\code{compare_to_benchmark}   & \code{active_weights}   & Where are we most overweight? \\
+\code{get_sector_exposure}    & \code{sector_exposure}  & What are our sector bets? \\
+\code{check_limits}           & \code{check_limits}     & Are we breaching any limits? \\
+\code{simulate_trades}        & \code{apply_trades}, \code{check_limits}, \code{compare_flags} & If I sell \$1M of NVDA, do we still breach anything? \\
+\code{get_weight_changes}     & \code{weight_changes}   & What moved overnight? \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{How one tool is put together}
+
+Every tool has the same three-step shape: \textbf{load} (data.py), \textbf{compute}
+(analytics.py), \textbf{format} (percent and rounding). Here is \code{check_limits}:
+
+\begin{lstlisting}[style=py]
+@tool
+def check_limits(portfolio: str = DEFAULT_PORTFOLIO, date: str | None = None) -> dict[str, Any]:
+    """Check the fund against its risk limits. ...
+    Example: "Are we breaching any limits?" or "Is anything close to a limit?"
+    """
+    with readable_errors():
+        port, used_date, prices = load(portfolio, date)                     # 1. load
+        flags = analytics.check_limits(port, prices, data.sector_map(),
+                                       benchmark_for(port))                  # 2. compute
+        return {                                                             # 3. format
+            "portfolio": port.name,
+            "date": used_date,
+            "breach_count": sum(f["status"] == "breach" for f in flags),
+            "warning_count": sum(f["status"] == "warning" for f in flags),
+            "limits": limit_fields(port.limits),
+            "flags": [flag_fields(f) for f in flags],
+        }
+\end{lstlisting}
+
+The supporting pieces, each a few lines:
+
+\begin{description}[style=nextline]
+  \item[\code{@tool}] Registers the function with the server as read-only. The docstring
+        becomes the description (see ``What we learned about the SDK'' below).
+  \item[\code{readable_errors()}] A context manager: any \code{ValueError} inside the
+        \code{with} block becomes a \code{ToolError}, so the message reaches the model.
+  \item[\code{pct(weight)}] \code{round(weight * 100, 2)}: 0.152034 becomes 15.2. This is
+        a unit conversion, not new math, which is what the architecture rules allow here.
+  \item[\code{load(portfolio, date)}] Returns the portfolio, the date actually used (the
+        latest one if none was given), and that day's prices. Every tool reports the date it
+        used, so the model never has to guess which day a number is from.
+\end{description}
+
+\textbf{What the model receives} for ``Are we breaching any limits?'' on 2026-10-22:
+
+\begin{lstlisting}[style=plain]
+{
+  "portfolio": "sample_fund", "date": "2026-10-22",
+  "breach_count": 1, "warning_count": 0,
+  "limits": {"max_position_pct": 15.0, "max_stock_active_pct": 5.0,
+             "max_sector_active_pct": 8.0, "max_gross_pct": 115.0,
+             "min_net_pct": 90.0, "max_net_pct": 102.0,
+             "warn_at": 0.9, "net_warn_buffer_pct": 2.0},
+  "flags": [{"rule": "max_position", "subject": "NVDA",
+             "value_pct": 15.2, "limit_pct": 15.0, "status": "breach"}]
+}
+\end{lstlisting}
+
+And for a mistake, \code{portfolio="nope"}:
+
+\begin{lstlisting}[style=plain]
+Error executing tool check_limits: Unknown portfolio 'nope'. Available: sample_fund
+\end{lstlisting}
+
+The model can read ``Available: sample\_fund'' and retry with the right name. That message was
+written in M1a (\code{data.py}); the MCP layer just lets it through.
+
+\subsection{The what-if tool in detail}
+
+\code{simulate_trades} is the richest tool. For ``If I sell \$1M of NVDA, do we still breach
+anything?'', it returns the before and after summary and flags, plus:
+
+\begin{lstlisting}[style=plain]
+"resolved_flags": [{"rule": "max_position", "subject": "NVDA", "value_pct": 15.2, ...}],
+"new_flags": [],
+"traded_positions": [{"ticker": "NVDA", "shares_before": 38889.0,
+                      "shares_after": 33838.49,
+                      "weight_before_pct": 15.2, "weight_after_pct": 13.23}]
+\end{lstlisting}
+
+\textbf{Why \code{traded_positions} exists.} After the sale, NVDA has no flag at all, so the
+``after'' flags cannot tell the model NVDA's new weight. But the morning brief (SPEC~\S9) has
+to say ``selling \$1M of NVDA would bring it to 13.23\%'', and every number must come from a
+tool. So the tool returns each traded stock's weight before and after. Without it, the model
+would be tempted to work out 13.23\% itself, which is exactly what the project forbids.
+
+\subsection{Units, rounding, and defaults}
+
+\begin{itemize}
+  \item \textbf{Percent fields} (\code{*_pct}) are rounded to 2 decimals. Differences between
+        percentages (\code{active_pct}, \code{weight_change_pct}) are percentage points;
+        the server instructions say so, so the model does not call a 1.2-point change
+        ``1.2\% growth''.
+  \item \textbf{Dollar fields} (\code{*_usd}) are rounded to cents.
+  \item \textbf{\code{warn_at} stays a fraction} (0.9), because it is not a weight: it scales
+        each limit (0.9 $\times$ 15\% $=$ 13.5\%). Every other limit is converted to percent.
+  \item \textbf{Defaults:} portfolio \code{sample_fund}; date the latest price date;
+        \code{top_n} 10 (0 means all); weight changes default to overnight (the price date
+        before the end date, to the end date).
+  \item \textbf{List tools report the full count} (\code{total_positions},
+        \code{total_stocks}), so with the default \code{top_n} of 10 the model knows it is
+        seeing 10 of 22, not everything.
+\end{itemize}
+
+\subsection{What we learned about the SDK}
+
+Before writing the server, a throwaway script checked the installed SDK (\code{mcp} 2.3.0)
+against the notes in \code{CLAUDE.md}. Everything matched (\code{MCPServer},
+\code{dict[str, Any]} for structured output, \code{ToolError}, the in-process \code{Client},
+snake\_case fields). Three details were new:
+
+\begin{enumerate}
+  \item \textbf{A \code{ToolError}'s message arrives prefixed}: ``Error executing tool
+        check\_limits: Unknown portfolio \ldots''. A plain \code{ValueError} arrives as just
+        ``Error executing tool check\_limits'', with the useful part gone.
+  \item \textbf{Docstrings are sent with their code indentation}, so every line after the
+        first started with four spaces. The \code{@tool} helper runs \code{inspect.cleandoc}
+        on the docstring first, which removes it.
+  \item \textbf{\code{Args:} sections in docstrings are not turned into parameter
+        descriptions.} So each description explains its parameters in plain sentences, and
+        the trades parameter uses a \code{TypedDict} so the JSON Schema names its fields
+        (\code{ticker}, \code{dollars}). A bare \code{list[dict]} would have produced a
+        schema that says only ``array of objects''.
+\end{enumerate}
+
+\subsection{Decisions and why}
+
+\begin{enumerate}
+  \item \textbf{A \code{with readable_errors():} block in each tool, rather than a wrapping
+        decorator.} A decorator that wraps the function can hide its signature from the SDK,
+        which builds the input schema from it. The \code{with} block is explicit and safe.
+  \item \textbf{\code{TypedDict} instead of a pydantic model for trades.} pydantic is
+        installed (the MCP SDK depends on it), but importing it directly would make it our
+        dependency without listing it. \code{TypedDict} is in the standard library.
+  \item \textbf{Default \code{top_n} of 10, not ``all''.} With real data in M6 the benchmark
+        has about 500 stocks; dumping all of them costs tokens and buries the answer. The
+        total count keeps the model honest about what it has not seen.
+  \item \textbf{\code{simulate_trades} returns traded positions' weights}, so the
+        ``would bring it to 13.23\%'' sentence in the brief comes from a tool, not the model.
+  \item \textbf{Counting flags in the server} (\code{breach_count}) is tallying, not finance
+        math, so it stays in the formatting layer. It saves the model from counting a list.
+  \item \textbf{Two new loaders in \code{data.py}}, because both the server and the sanity
+        tests needed the same reshaping (benchmark and sectors as Series). Keeping it in
+        \code{data.py} means one place to change when real data arrives in M6.
+  \item \textbf{Names and sectors included in rows}, so ``what's our biggest health care
+        position?'' needs one call, not two.
+\end{enumerate}
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item Wrote \code{tests/test_mcp_server.py} (16 tests) first and watched it fail on the
+        missing module; then implemented the server until all passed. They cover the four
+        ``done when'' checks from TASKS.md: all 8 tools listed with descriptions (and
+        read-only), \code{check_limits} returning the NVDA breach in percent, the \$1M sale
+        resolving it, and a bad portfolio name giving a readable error. They also check
+        every other tool's numbers against the M1a tables (e.g. Tech net 37.0\%, benchmark
+        40.0\%, active $-3.0$ on 10/21).
+  \item One test launches \code{python -m pm_agent.mcp_server} as a subprocess and calls a
+        tool over stdio, the way Claude Code will.
+  \item Mutation check: with the \code{ToolError} conversion disabled, the 4 error tests
+        failed; restored, all passed.
+  \item Printed every tool description as the client receives it and read them as a model
+        would. That is how the indentation problem was found.
+  \item Full suite: 76 passed.
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item What four things does the server send for each tool, and which one does the model
+        rely on most when choosing a tool?
+  \item What would the model see if \code{check_limits} raised a plain \code{ValueError}
+        for an unknown portfolio? Why does the SDK behave that way?
+  \item Why does \code{simulate_trades} return \code{traded_positions} when the after-flags
+        are already there?
+  \item Why is \code{warn_at} not converted to percent, while \code{net_warn_buffer} is?
+  \item Why does every tool return the \code{date} it used?
+  \item What is the difference between the in-process test client and the stdio test, and
+        why have both?
+  \item The trades parameter is a \code{TypedDict}. What would the model see in the schema if
+        it were a plain \code{list[dict]}?
+\end{enumerate}
+\end{reviewq}
+
+\begin{takeaway}
+The MCP server is a translation layer: it loads data, calls the tested analytics, and turns
+decimals into the units a reader expects. It does no math of its own. Most of the work was
+in what the model sees: descriptions with example questions, named fields, the date on every
+answer, and error messages that say what is available. One output, the traded stock's
+weight after a trade, was added specifically so the model never has to compute a number
+itself.
+\end{takeaway}
+
+% ---------------------------------------------------------------------
+\section{M2b: the server inside Claude Code}
+
+\subsection{Goal}
+
+Tasks 2.2 and 2.3: connect our MCP server to a real client, Claude Code, and ask it portfolio
+questions in plain English. Then fix any tool description that made it pick the wrong tool or
+ask for clarification. This is the first time a model uses our tools, so it is the first real
+test of the descriptions written in M2a.
+
+\subsection{What was done}
+
+\begin{enumerate}
+  \item Ran \code{claude mcp add --scope project pm-agent -- .venv/bin/python -m
+        pm_agent.mcp_server}, which wrote \code{.mcp.json} (Part~I). The first attempt failed
+        with ``command not found'' because of the shell PATH (Part~I); one line in
+        \code{~/.zshrc} fixed it.
+  \item Approved the server for this project (but not ``all future servers'', see Part~I).
+  \item \code{claude mcp list} reported \code{pm-agent ... Connected}.
+  \item Asked six questions, one at a time, and checked every number in every answer
+        against the tool output.
+\end{enumerate}
+
+\subsection{The six questions}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}X c X@{}}
+\toprule
+\textbf{Question} & \textbf{Calls} & \textbf{What happened} \\
+\midrule
+Are we breaching any limits? & 1 & NVDA 15.2\% vs 15\% breach; nothing else. Correct. \\
+Five biggest positions; most overweight? & 2 & Correct. Saw only the top 10 bets, but reasoned correctly that any other overweight is at most 0.6 points. \\
+What changed overnight to cause the breach? & 2 & NVDA $+10\%$, weight 14\% $\to$ 15.2\%. It also checked 10/21 to show warning $\to$ breach. Correct. \\
+Sell \$1M NVDA, buy \$1M UNH: still breaching? & 1 & One call with both trades. Breach resolved, no new flags, NVDA 13.23\%, UNH 5.15\%. Correct. \\
+Our weight in FAKECO? & 1 & ``Not held, not in the benchmark.'' No invented number. \\
+Which stock should I buy next? & 1 & Declined to pick, but then framed benchmark underweights as things to buy. Borderline. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Every number matched a tool result.} To check, the same tool calls were rerun with a
+short script and compared value by value: market values, active weights, sector active
+weights, overnight changes, and the after-trade weights (including UNH's 7{,}880.32 shares).
+None were invented.
+
+Notice what the model did \emph{not} need to do. For ``sell \$1M NVDA'', it read NVDA's new
+weight (13.23\%) straight from \code{traded_positions}, the field added in M2a for exactly this
+reason. For ``what caused the breach'', it chose to call \code{check_limits} for the previous
+day too, without being told, because the description says what the tool is for.
+
+\subsection{Task 2.3: description changes}
+
+\textbf{None.} The task is to rewrite descriptions that caused a wrong tool choice or a
+request for clarification, and neither happened. Changing descriptions that already work
+would be change for its own sake, and would make it harder to tell later (in M4, with real
+measurements) what helped.
+
+Four observations were logged in \code{docs/NOTES.md} for later milestones instead:
+
+\begin{enumerate}
+  \item \textbf{The advice question is a prompt problem, not a tool problem.} With no
+        system prompt (that arrives in M3), Claude still leaned towards suggesting buys. SPEC
+        rule 4 (``explain the effect of trades the user proposes'') belongs in the agent's
+        prompt.
+  \item \textbf{\code{top_n} ranks by absolute size}, so for ``most overweight'' the top 10
+        can be mostly underweights. Fine on 25 stocks; may need a direction filter with a
+        500-stock benchmark (M6). Evals will tell.
+  \item \textbf{No tool sizes a trade to a target weight.} Claude offered to work out ``how
+        much NVDA to sell to get under 15\%''. With dollar-only trades, that means guessing
+        and retrying, or doing math. The morning brief (M5) needs this, so it is checked there.
+  \item \textbf{Loose summaries.} ``About $-0.1$ points'' summarised several small values.
+        Harmless to a reader, but the M4 made-up-number check needs a rule for it.
+\end{enumerate}
+
+\subsection{Decisions and why}
+
+\begin{itemize}
+  \item \textbf{Project scope (\code{.mcp.json}, committed)} rather than local scope, so the
+        setup travels with the repo, and \textbf{a relative command path} so it works on
+        any clone.
+  \item \textbf{Approve this server only}, not all future project servers, because the repo
+        is public.
+  \item \textbf{Change nothing without evidence.} Six good answers are not proof the
+        descriptions are perfect, but they are no evidence of a problem either. M4's evals
+        are where description changes get measured.
+\end{itemize}
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item \code{claude mcp list} shows the server connected (task 2.2's first check).
+  \item ``Are we breaching any limits?'' was answered correctly using the tools (its second
+        check).
+  \item All numbers in all six answers were checked against a rerun of the same tool calls.
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item What is the difference between local, project and user scope for an MCP server, and
+        why is project scope right here?
+  \item Why did \code{claude} give ``command not found'' although it was installed?
+  \item Why not choose ``use this and all future MCP servers in this project''?
+  \item The advice answer was borderline. Why is the fix in the system prompt (M3) and not
+        in a tool description?
+  \item Task 2.3 changed nothing. Why is that a reasonable outcome, and not a skipped task?
+  \item Which field added in M2a let the model answer the \$1M trade question without doing
+        any math?
+\end{enumerate}
+\end{reviewq}
+
+\begin{takeaway}
+The first real model to use the tools picked the right one every time, asked for no
+clarification, and invented no numbers. The descriptions were left as they were, because
+nothing pointed to a problem. The rough edges it exposed (advice, ranking direction, sizing a
+trade to a target) were logged with the milestone that should deal with each one.
+\end{takeaway}
+
 % =====================================================================
 \appendix
 \section{Glossary}
@@ -1394,8 +1846,10 @@ showed that those tests catch a broken story.
   \item[Benchmark] The index a fund is compared against.
   \item[Breach] A limit exceeded.
   \item[CI] Continuous integration: automatic tests on every push.
+  \item[Context manager] An object used with \code{with} that runs setup and cleanup around a block.
   \item[Dataclass] A Python class that just holds typed fields; \code{frozen} makes it immutable.
   \item[DataFrame] A pandas table with named columns.
+  \item[Decorator] A function applied with \code{@name} that registers or wraps another function.
   \item[Eval] A scored test suite for AI behaviour.
   \item[Flag identity] A flag's (rule, subject) pair, used to compare flags before and after a trade.
   \item[Gross exposure] Long minus short: the total size of all bets.
@@ -1404,17 +1858,25 @@ showed that those tests catch a broken story.
   \item[Hedge] A position taken to offset risk from another.
   \item[Immutable] Cannot be changed after creation; changes make a new copy.
   \item[Index alignment] pandas matching rows by label when combining tables.
+  \item[JSON Schema] A standard JSON description of a tool's arguments and their types.
   \item[LLM] Large language model.
+  \item[.mcp.json] The committed file listing a project's MCP servers for Claude Code.
   \item[MCP] Model Context Protocol: a standard for exposing tools to AI.
   \item[Mutation check] Breaking code or data on purpose to prove a test can fail.
   \item[NAV] Net asset value: market values plus cash.
   \item[Net exposure] Long plus short: the direction of the market bet.
+  \item[PATH] The list of folders the shell searches for commands.
   \item[Pre-trade check] Simulating a trade and checking limits before placing it.
   \item[Pure function] Output depends only on inputs; no files, network, or side effects.
   \item[Seed] The starting value for a random number generator.
+  \item[Server instructions] Guidance an MCP server sends once, for every tool.
   \item[Short] Selling borrowed shares; profits when the price falls.
   \item[Stable sort] A sort that keeps tied items in their original order.
+  \item[Structured output] A tool result as a JSON object with named fields.
+  \item[Tool annotation] A behaviour hint on a tool, e.g. read-only.
   \item[Tool use] A model asking the program to run a function.
+  \item[ToolError] The MCP exception whose message is shown to the model.
+  \item[TypedDict] A type hint for a dict with known keys.
   \item[Warning] Close to a limit (90\% of it, or within 2 points for net).
   \item[Weight] Market value divided by NAV.
 \end{description}
@@ -1428,6 +1890,7 @@ pip install -e ".[dev]"             # install the project + dev tools
 pytest -q                           # run all tests quietly
 pytest tests/test_data.py -v        # run one file, verbose
 python scripts/make_sample_data.py  # regenerate data/sample
+python -m pm_agent.mcp_server       # run the MCP server over stdio
 
 git status                          # what changed?
 git diff                            # show the changes
