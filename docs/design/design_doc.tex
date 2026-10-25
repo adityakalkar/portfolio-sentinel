@@ -54,7 +54,7 @@
 
 \title{\textbf{Portfolio Sentinel}\\[0.3em]\large Design Document: concepts, architecture, and decisions}
 \author{Aditya Kalkar}
-\date{Last updated: 2026-10-24 (through milestone M2)}
+\date{Last updated: 2026-10-24 (through milestone M3)}
 
 \begin{document}
 \maketitle
@@ -148,7 +148,7 @@ Read it bottom-up:
         comparison, limit checks, what-if trades. No files, no network, no AI.
   \item[MCP server (built in M2a)] Wraps analytics as tools an AI can call. It converts decimals
         (0.142) to percentages (14.2) and rounds. It does no new math.
-  \item[Agent (M3)] A loop we write by hand: send the question and tool list to Claude;
+  \item[Agent (built in M3)] A loop we write by hand: send the question and tool list to Claude;
         if Claude asks for a tool, run it through MCP and send back the result; repeat until
         Claude gives a final answer.
   \item[Evals (M4) and morning brief (M5)] Built on top of the agent.
@@ -174,8 +174,8 @@ M1a & Synthetic sample data with a planted story; data loaders & Done \\
 M1b & Analytics core, written test-first; sample data sanity tests & Done \\
 M2a & MCP server with 8 tools (task 2.1), tested in-process and over stdio & Done \\
 M2b & Connected to Claude Code; tool description pass (tasks 2.2, 2.3) & Done \\
-M3  & Hand-written agent loop, system prompt, run logging & Next \\
-M4  & Eval harness: test cases, scoring, results history & \\
+M3  & Hand-written agent loop, system prompt, run logging & Done \\
+M4  & Eval harness: test cases, scoring, results history & Next \\
 M5  & Morning brief, scenario evals, scheduling, delivery & \\
 M6  & Real data (ETF holdings, SEC 13F filings, prices) & \\
 M7  & Streamlit UI, metrics dashboard, deploy, demo & \\
@@ -429,6 +429,57 @@ An \textbf{agent} is an LLM in a loop with tools:
 The program around the model (the loop, the logging, the safety limits) is called the
 \textbf{harness}. We write ours by hand, with no framework such as LangChain, so that every line
 is understood and explainable.
+
+\subsection{The Messages API, block by block (added in M3)}
+
+Our agent talks to Claude through one HTTP endpoint, the \textbf{Messages API}, via
+Anthropic's Python SDK. Each request carries:
+
+\begin{description}[style=nextline]
+  \item[\code{model}] Which model, e.g. \code{claude-opus-5-5}.
+  \item[\code{system}] The \textbf{system prompt}: standing instructions that apply to the
+        whole conversation (our rules: never compute numbers, no advice, \ldots).
+  \item[\code{tools}] The tool definitions: name, description, input schema.
+  \item[\code{messages}] The whole conversation so far, alternating \code{user} and
+        \code{assistant}. The API is \textbf{stateless}: it remembers nothing between
+        requests, so the full history is sent every time.
+  \item[\code{max_tokens}] A ceiling on the length of the reply.
+\end{description}
+
+A message's content is a list of \textbf{content blocks}, each with a \code{type}:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Block type} & \textbf{Who writes it} & \textbf{What it is} \\
+\midrule
+\code{text}        & either    & ordinary text \\
+\code{tool_use}    & assistant & ``please run tool X with these arguments''; has an \code{id} \\
+\code{tool_result} & user (our code) & the tool's output, tagged with the same \code{id} \\
+\code{thinking}    & assistant & the model's private reasoning (we just pass it back) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Every response also has a \textbf{\code{stop_reason}}: why the model stopped writing.
+\code{tool_use} means ``I'm waiting for tool results''; \code{end_turn} means ``that's my
+answer''. Others: \code{max_tokens} (hit the length ceiling), \code{refusal} (declined). The
+whole agent loop is driven by this one field.
+
+\textbf{Thinking and effort.} Claude Opus 5.5 can reason privately before answering; how
+much is set by \code{effort} (\code{low} to \code{max}). Higher effort is slower and costs
+more tokens. We use \code{medium}.
+
+\textbf{Tokens and cost.} The response reports \code{usage.input_tokens} (everything sent:
+system prompt, tool definitions, history) and \code{usage.output_tokens} (what the model
+wrote). Claude Opus 5.5 costs \$4 per million input tokens and \$20 per million output tokens.
+Because the API is stateless, every step of the loop pays again for the system prompt and
+tool definitions. \textbf{Prompt caching} (a later optimisation) lets repeated prefixes be
+billed at a fraction of the price.
+
+\textbf{Refusals and fallbacks.} Safety classifiers can occasionally decline a request, even a
+harmless one. With \code{fallbacks="default"} (a beta feature), the API quietly retries such
+a request on another model and returns that answer instead of nothing.
 
 \subsection{MCP (Model Context Protocol)}
 
@@ -701,6 +752,27 @@ decision guarantees.
         work run. \code{asyncio.run(main())} starts an event loop, runs \code{main} to the
         end, and returns its result. Our tests wrap each client call in \code{asyncio.run},
         so the test functions themselves stay ordinary (no async test plugin needed).
+\end{description}
+
+\subsection{Fakes, environment variables, and JSON Lines (added in M3)}
+
+\begin{description}[style=nextline]
+  \item[Test double (fake)] A stand-in for something slow, costly, or unpredictable, used in
+        tests. Our \code{FakeModel} plays Claude's part from a script (``first ask for
+        \code{check_limits}, then answer''), so the agent loop can be tested in a second, for
+        free, with the same result every time. This works because the agent takes the model
+        as an argument (\code{create_message}) instead of creating it inside; that pattern is
+        called \textbf{dependency injection}.
+  \item[Environment variables and \code{.env}] Settings a program reads from its environment,
+        such as \code{ANTHROPIC_API_KEY} or \code{PM_AGENT_MODEL}. Keeping them out of the code
+        means the same code runs with different keys or models, and secrets never get
+        committed. \code{.env} is a git-ignored file of \code{KEY=value} lines; a ten-line
+        \code{load_dotenv()} copies them into the environment at startup, without overriding
+        anything already set in the shell.
+  \item[JSON Lines (\code{.jsonl})] A file with one complete JSON object per line. Appending a
+        run is just writing one more line, so the file never has to be read and rewritten,
+        and a crash can only lose the run in progress. Later code (evals, dashboards) reads it
+        line by line.
 \end{description}
 
 \subsection{The shell PATH (added in M2b)}
@@ -1836,6 +1908,298 @@ nothing pointed to a problem. The rough edges it exposed (advice, ranking direct
 trade to a target) were logged with the milestone that should deal with each one.
 \end{takeaway}
 
+% ---------------------------------------------------------------------
+\section{M3: the agent}
+
+\subsection{Goal}
+
+Tasks 3.1 to 3.4: our own agent, a program that takes a question in plain English, lets Claude
+choose and call our MCP tools, and returns the answer with a full record of what happened.
+Hand-written, with no agent framework (SPEC~\S8).
+
+\begin{lstlisting}[style=plain]
+$ python -m pm_agent.agent "Are we breaching any limits?"
+Yes, there's one breach as of 2026-10-22. NVDA is at 15.2% of NAV, which is just over
+the 15.0% maximum position size. ...
+[claude-opus-5-5 | 2 model calls | tools: check_limits | 7395 in / 233 out tokens | 4.8s]
+\end{lstlisting}
+
+\subsection{What was built}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{File} & \textbf{What it does} \\
+\midrule
+\code{src/pm_agent/agent.py}   & the loop (3.1), run log (3.3), command-line entry point \\
+\code{src/pm_agent/prompts.py} & the system prompt with the five SPEC~\S8 rules (3.2) \\
+\code{tests/test_agent.py}     & 12 tests using a fake model: no API calls, no cost \\
+\code{logs/runs.jsonl}         & one line per run (git-ignored; created on first run) \\
+\code{pyproject.toml}          & adds the \code{anthropic} SDK (the planned M3 dependency) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{The loop (3.1)}
+
+The heart of \code{run_agent}, slightly shortened:
+
+\begin{lstlisting}[style=py]
+async with Client(server or server_params()) as mcp:            # start the MCP server
+    tools = [to_claude_tool(t) for t in (await mcp.list_tools()).tools]
+    messages = [{"role": "user", "content": question}]
+    request = {"model": log.model, "max_tokens": MAX_TOKENS, "tools": tools,
+               "system": f"{system or SYSTEM_PROMPT}\n\n{mcp.instructions}",
+               "output_config": {"effort": EFFORT}}
+
+    while log.steps < max_steps:
+        response = await create_message(**request, messages=messages)
+        log.steps += 1                                         # (token counting omitted)
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason != "tool_use":                 # an answer: we're done
+            log.answer = final_text(response.content)
+            break
+
+        results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = await mcp.call_tool(block.name, block.input)
+                results.append({"type": "tool_result", "tool_use_id": block.id,
+                                "content": result_text(result),
+                                "is_error": bool(result.is_error)})
+        messages.append({"role": "user", "content": results})   # all results, one message
+    else:
+        log.stop_reason = "max_steps"                           # guard: never loop forever
+\end{lstlisting}
+
+Points worth noticing:
+
+\begin{itemize}
+  \item \textbf{Tool definitions are not written twice.} They come from the server's
+        \code{list_tools()} and are renamed field-for-field (\code{to_claude_tool}), so a
+        description improved in \code{mcp_server.py} reaches Claude Code and our agent alike.
+        The same goes for the server's \code{instructions} (units, naming), appended to the
+        system prompt.
+  \item \textbf{The reply goes back unchanged.} \code{response.content} is appended as-is,
+        including any \code{thinking} blocks. The model needs to see its own
+        \code{tool_use} block next to the matching \code{tool_result}, and Claude Opus 5.5
+        requires the history to be append-only.
+  \item \textbf{Errors are data, not crashes.} A tool error (unknown portfolio, bad date) goes
+        back as a \code{tool_result} with \code{is_error: true} and the message from
+        \code{data.py}, so the model can fix its call. It is also recorded in the log.
+  \item \textbf{\code{while ... else}.} In Python, the \code{else} of a loop runs only if the
+        loop ended without \code{break}: here, only if the step limit ran out.
+\end{itemize}
+
+\subsection{One run, message by message (3.4)}\label{sec:m3-walkthrough}
+
+This is a real, recorded run of ``Are we breaching any limits?'' (2026-10-24, Claude Opus
+5.5, effort \code{medium}). The loop made two calls to the API.
+
+\textbf{Before call 1.} The agent starts the MCP server as a subprocess, reads the 8 tool
+definitions and the server's instructions, and builds the system prompt (1{,}932 characters:
+our five rules plus the units explanation).
+
+\textbf{Call 1: request.} One message:
+
+\begin{lstlisting}[style=plain]
+system:   <rules + server instructions>        tools: <8 definitions>
+messages: [ user: "Are we breaching any limits?" ]
+\end{lstlisting}
+
+\textbf{Call 1: response.} \code{stop_reason: tool_use}. One block:
+
+\begin{lstlisting}[style=plain]
+tool_use  id=toolu_01MeGD...  name=check_limits  input={}
+\end{lstlisting}
+
+The model chose the tool from its description alone, and left both arguments at their defaults
+(portfolio \code{sample_fund}, latest date). Usage: 3{,}571 input tokens, 27 output tokens.
+Almost all the input is the system prompt and the tool definitions; the question itself is
+a handful of tokens.
+
+\textbf{Between the calls: our code runs the tool.} The loop sees \code{tool_use}, calls
+\code{check_limits} through MCP (32 milliseconds), and gets the structured result.
+
+\textbf{Call 2: request.} The whole conversation again, now three messages:
+
+\begin{lstlisting}[style=plain]
+messages: [
+  user:      "Are we breaching any limits?"
+  assistant: [tool_use id=toolu_01MeGD... name=check_limits input={}]
+  user:      [tool_result tool_use_id=toolu_01MeGD... is_error=false
+              content={"portfolio": "sample_fund", "date": "2026-10-22",
+                       "breach_count": 1, "warning_count": 0, "limits": {...},
+                       "flags": [{"rule": "max_position", "subject": "NVDA",
+                                  "value_pct": 15.2, "limit_pct": 15.0,
+                                  "status": "breach"}]}]
+]
+\end{lstlisting}
+
+Note the roles: the tool result is sent as a \code{user} message, because it comes from our side
+of the conversation. The \code{tool_use_id} ties it to the request it answers.
+
+\textbf{Call 2: response.} \code{stop_reason: end_turn}. One \code{text} block:
+
+\begin{lstlisting}[style=plain]
+Yes, there's one breach as of 2026-10-22. NVDA is at 15.2% of NAV, which is just over
+the 15.0% maximum position size.
+There are no warnings, so nothing else is close to a limit. ...
+If you have a trade in mind, such as trimming NVDA by a certain dollar amount, I can
+test whether it clears the breach without creating new ones.
+\end{lstlisting}
+
+Usage: 3{,}824 input tokens, 206 output tokens. Every number in it (15.2, 15.0, the limits, the
+date) is in the tool result. ``Just over'' is the words-not-numbers escape hatch from rule~1.
+
+\textbf{After the loop.} The \code{end_turn} ends the loop. The run log records 2 model calls,
+one tool call (\code{check_limits}, no arguments, 0.032~s, no error), 7{,}395 input and 233
+output tokens, and 4.8~s, and is appended to \code{logs/runs.jsonl}.
+
+\textbf{Cost of this run}: $7{,}395 \times \$4/10^6 + 233 \times \$20/10^6 \approx \$0.030 +
+\$0.005 = \$0.035$. Most of it is input, and most of the input is the same system prompt and
+tool definitions sent twice. That is the case for prompt caching, logged in
+\code{docs/NOTES.md} for the eval work in M4.
+
+\subsection{The system prompt (3.2)}
+
+\begin{lstlisting}[style=plain]
+You help a portfolio manager understand their fund: holdings, exposures, risk limits,
+and the effect of trades they are considering. Answer using the portfolio tools, which
+compute every number in tested code.
+
+Rules:
+1. Every number in your answer must appear in a tool result from this conversation.
+   Don't estimate, and don't calculate new numbers yourself: no differences, sums,
+   ratios, or re-rounding of tool numbers. For example, don't turn "15.2% vs a 15%
+   limit" into "0.2 points over". If you want a number no tool result contains, call a
+   tool that provides it, or describe it in words ("just over the limit").
+2. Quote percentages and dollar amounts exactly as the tools return them, with units.
+3. If a tool returns an error, read it ... Fix the call and try again.
+4. Don't give investment advice ... offer to test a trade they are considering.
+5. Be concise. Lead with the direct answer ... say which date the numbers are for.
+\end{lstlisting}
+
+\textbf{Before and after.} The first live run of the agent, with no system prompt, answered
+correctly but said NVDA was ``0.2 percentage points over''. That is $15.2 - 15.0$, a
+subtraction the model did itself: a direct break of the project's one rule. Three questions,
+before and after the prompt (the first ``before'' is our agent with no system prompt; the
+other two are from the M2b trial in Claude Code, which had none of our rules either):
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X X@{}}
+\toprule
+\textbf{Question} & \textbf{Before} & \textbf{After} \\
+\midrule
+Breaching any limits? & ``0.2 percentage points over'' (computed) & quotes 15.2\% and 15.0\% only \\
+Which stock to buy? & declined, then listed underweights ``to buy'' & declines; offers to test a proposed trade \\
+What changed overnight? & ``about $-0.1$ pp'' (in no tool result) & ``about a tenth of a point or less'' \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Why the prompt is written this way.}
+
+\begin{itemize}
+  \item \textbf{A concrete example of the failure} (``0.2 points over'') teaches more than an
+        abstract rule. Models follow examples closely.
+  \item \textbf{An honest escape hatch.} Forbidding all derived numbers without an alternative
+        would leave the model unable to say ``just over''. Allowing words keeps answers
+        natural without inventing figures.
+  \item \textbf{Reasons, not shouting.} Current models follow calm, explained instructions
+        well; capital letters and ``NEVER'' tend to make them over-cautious.
+  \item \textbf{Units live in the server, not here.} The agent appends the MCP server's
+        instructions, so the explanation of \code{_pct} and \code{_usd} is written once.
+\end{itemize}
+
+\subsection{Run logging (3.3)}
+
+Each run's \code{RunLog} (question, model, answer, stop reason, steps, each tool call with
+arguments, duration and error, tokens in and out, latency, timestamp) is appended as one line
+of \code{logs/runs.jsonl}. This is the raw material for the M4 metrics (accuracy, tool choice,
+cost, latency). Tests redirect the log to a temporary file, so running the tests never writes
+to the real log.
+
+\subsection{Testing without the API}
+
+\begin{lstlisting}[style=py]
+fake = FakeModel(
+    reply("tool_use", text("Let me check."), ask_tool("check_limits")),
+    reply("end_turn", text("Yes: NVDA is at 15.2% vs a 15% limit.")),
+)
+log = run("Are we breaching any limits?", fake)
+assert [(c.name, c.args, c.error) for c in log.tool_calls] == [("check_limits", {}, None)]
+\end{lstlisting}
+
+The fake returns scripted replies (built from the SDK's own block types, so they look exactly
+like real ones) and records every request. The tools are \emph{real}: the loop talks to our
+actual MCP server, in-process. The tests cover the single tool call, the tool definitions and
+server instructions reaching the model, a tool error going back as \code{is_error}, two tool
+calls answered in one message, the step limit, the model chosen from \code{PM_AGENT_MODEL},
+the \code{.env} loader, and the run log.
+
+\subsection{Decisions and why}
+
+\begin{enumerate}
+  \item \textbf{A hand-written loop rather than the SDK's tool runner.} The spec asks for it:
+        every line of the harness should be explainable, and the evals need hooks into each
+        step. The loop is about 40 lines.
+  \item \textbf{The model is an argument (\code{create_message}).} That one decision makes the
+        loop testable for free, and is how evals will run it later.
+  \item \textbf{Effort set explicitly to \code{medium}.} It is the model's default, but
+        writing it down makes the cost and quality lever visible, ready for M4 to compare.
+  \item \textbf{Server-side refusal fallbacks enabled} (\code{fallbacks="default"}, a beta).
+        If a classifier wrongly declines a question, the API retries on another model. The
+        API guidance recommends this by default for this model. Removing it is two lines.
+  \item \textbf{A ten-line \code{.env} loader instead of the \code{python-dotenv}
+        library}, to avoid a dependency for something this small.
+  \item \textbf{The step limit counts model calls} (default 10). Each call can request
+        several tools, so this bounds cost per question.
+  \item \textbf{No retries of our own.} The SDK already retries rate limits and server errors
+        twice with backoff.
+\end{enumerate}
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item Wrote the fake-model tests first and watched them fail (no \code{agent} module, then
+        no \code{prompts} module, then no \code{RUNS_LOG}); implemented until they passed.
+  \item Ran \code{python -m pm_agent.agent "Are we breaching any limits?"} against the real
+        API: correct answer, one \code{check_limits} call (task 3.1's ``done when'').
+  \item Ran three questions with and without the system prompt and checked every number
+        against the tool outputs (the table above).
+  \item Recorded one full run's requests and responses for the walkthrough, and checked that
+        the run appeared in \code{logs/runs.jsonl}.
+  \item Full suite: 88 passed. Total API spend for M3: about \$0.20.
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item What does \code{stop_reason} tell the loop, and what does the loop do for
+        \code{tool_use} versus \code{end_turn}?
+  \item Why is the tool result sent with role \code{user}? What links it to the request?
+  \item The API is stateless. What does that mean for what each request contains, and for
+        cost?
+  \item In the walkthrough, call 1 used 3{,}571 input tokens for a four-word question.
+        Where did they come from?
+  \item Why does the agent take \code{create_message} as an argument?
+  \item Before the system prompt, the agent said ``0.2 percentage points over''. Why is that a
+        problem when 15.2 and 15.0 both came from a tool?
+  \item What does the \code{else} on the \code{while} loop do?
+  \item Why are tool errors sent back to the model instead of raising an exception?
+\end{enumerate}
+\end{reviewq}
+
+\begin{takeaway}
+The agent is a short loop around one field, \code{stop_reason}: while the model asks for
+tools, run them and send the results back; when it answers, stop. Everything else is
+bookkeeping (the run log) and guard rails (the step limit, the system prompt). The first live
+run showed why the guard rails matter: with no prompt, the model did a small subtraction on its
+own. A system prompt with a concrete example and an honest escape hatch fixed it, and the
+fake-model tests mean the loop itself is checked on every push without spending anything.
+\end{takeaway}
+
 % =====================================================================
 \appendix
 \section{Glossary}
@@ -1850,7 +2214,9 @@ trade to a target) were logged with the milestone that should deal with each one
   \item[Dataclass] A Python class that just holds typed fields; \code{frozen} makes it immutable.
   \item[DataFrame] A pandas table with named columns.
   \item[Decorator] A function applied with \code{@name} that registers or wraps another function.
+  \item[Effort] How much the model reasons before answering (low to max); trades cost for depth.
   \item[Eval] A scored test suite for AI behaviour.
+  \item[Fake (test double)] A scripted stand-in for something costly, used in tests.
   \item[Flag identity] A flag's (rule, subject) pair, used to compare flags before and after a trade.
   \item[Gross exposure] Long minus short: the total size of all bets.
   \item[GICS] The standard scheme for classifying companies into sectors.
@@ -1861,20 +2227,26 @@ trade to a target) were logged with the milestone that should deal with each one
   \item[JSON Schema] A standard JSON description of a tool's arguments and their types.
   \item[LLM] Large language model.
   \item[.mcp.json] The committed file listing a project's MCP servers for Claude Code.
+  \item[JSON Lines] A file with one JSON object per line; easy to append to.
   \item[MCP] Model Context Protocol: a standard for exposing tools to AI.
+  \item[Messages API] Anthropic's endpoint for conversations with Claude.
   \item[Mutation check] Breaking code or data on purpose to prove a test can fail.
   \item[NAV] Net asset value: market values plus cash.
   \item[Net exposure] Long plus short: the direction of the market bet.
   \item[PATH] The list of folders the shell searches for commands.
   \item[Pre-trade check] Simulating a trade and checking limits before placing it.
   \item[Pure function] Output depends only on inputs; no files, network, or side effects.
+  \item[Refusal fallback] Retrying a declined request on another model, server-side.
   \item[Seed] The starting value for a random number generator.
   \item[Server instructions] Guidance an MCP server sends once, for every tool.
   \item[Short] Selling borrowed shares; profits when the price falls.
   \item[Stable sort] A sort that keeps tied items in their original order.
+  \item[Stop reason] Why the model stopped: \code{tool_use}, \code{end_turn}, ...
   \item[Structured output] A tool result as a JSON object with named fields.
+  \item[System prompt] Standing instructions sent with every request.
   \item[Tool annotation] A behaviour hint on a tool, e.g. read-only.
   \item[Tool use] A model asking the program to run a function.
+  \item[tool\_result / tool\_use] The content blocks that carry a tool's output and a tool request.
   \item[ToolError] The MCP exception whose message is shown to the model.
   \item[TypedDict] A type hint for a dict with known keys.
   \item[Warning] Close to a limit (90\% of it, or within 2 points for net).
@@ -1891,6 +2263,7 @@ pytest -q                           # run all tests quietly
 pytest tests/test_data.py -v        # run one file, verbose
 python scripts/make_sample_data.py  # regenerate data/sample
 python -m pm_agent.mcp_server       # run the MCP server over stdio
+python -m pm_agent.agent "..."      # ask the agent a question (uses the API)
 
 git status                          # what changed?
 git diff                            # show the changes

@@ -62,15 +62,15 @@ criteria pass and the change has been reviewed.
 
 ## M3 — The agent (harness)
 
-- [ ] **3.1 Agent loop** — `src/pm_agent/agent.py`: connect to the MCP server over stdio, load
+- [x] **3.1 Agent loop** — `src/pm_agent/agent.py`: connect to the MCP server over stdio, load
   tool definitions from `list_tools()`, run the loop per SPEC §8, return the final answer plus
   a run log (tool calls with args/duration/errors, tokens, latency). Max-steps guard.
   - **Done when:** `python -m pm_agent.agent "Are we breaching any limits?"` prints a correct
     answer, and a unit test runs the loop against a **fake model** (no API call) that requests
     one tool and then answers.
-- [ ] **3.2 System prompt** — `src/pm_agent/prompts.py` with the rules in SPEC §8.
-- [ ] **3.3 Run logging** — each run appended to `logs/runs.jsonl`.
-- [ ] **3.4 Loop walkthrough** — document, message by message, what the loop sends and
+- [x] **3.2 System prompt** — `src/pm_agent/prompts.py` with the rules in SPEC §8.
+- [x] **3.3 Run logging** — each run appended to `logs/runs.jsonl`.
+- [x] **3.4 Loop walkthrough** — document, message by message, what the loop sends and
   receives for "Are we breaching any limits?" (in the design document).
 
 ## M4 — Eval harness

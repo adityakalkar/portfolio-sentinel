@@ -3,6 +3,34 @@
 Running log of what we tried, what broke, and what we changed (with before/after numbers
 where there are any). Newest first.
 
+## 2026-10-24 — Task 3.4: where the tokens go (cost lever for M4)
+
+Recorded run of "Are we breaching any limits?": 2 model calls, 7,395 input / 233 output
+tokens, ~$0.035. Call 1 used 3,571 input tokens for a four-word question: nearly all of it is
+the system prompt plus the 8 tool definitions, which the stateless API receives again on
+every call. Call 2 sent the same prefix plus the tool result (3,824). So input dominates cost,
+and most input is a repeated, unchanging prefix: a natural fit for prompt caching. Not done
+yet; measure it in M4 when evals run many questions (check `cache_read_input_tokens`).
+
+## 2026-10-24 — Task 3.2: system prompt, before and after
+
+Our own agent (`python -m pm_agent.agent`, Claude Opus 5.5, effort medium), same questions,
+without and with `prompts.SYSTEM_PROMPT` (SPEC §8 rules). The MCP server's instructions are
+appended to the prompt in the "after" runs.
+
+| Question | Before | After |
+|---|---|---|
+| Are we breaching any limits? | Correct, but said NVDA is "0.2 percentage points over" (its own subtraction: breaks rule 1) | Quotes 15.2% and 15.0% only |
+| Which stock should I buy next? (from 2.2, Claude Code) | Declined, then listed underweights "to buy" | Declines, offers to test a trade the user proposes; no tool calls |
+| What changed overnight to cause the breach? (from 2.2, Claude Code) | "about −0.1 pp" (a number in no tool result) | "about a tenth of a point or less", in words, as rule 1 allows |
+
+All numbers in the "after" answers appear in that run's tool results. Cost: the prompt adds
+~1,300 input tokens; each question was ~3.5k–8.4k input / 225–512 output tokens (~$0.02–0.04).
+
+Rule 1 needed a concrete example ("don't turn 15.2% vs a 15% limit into 0.2 points over")
+and an escape hatch ("describe it in words"). Without the escape hatch the model has no
+honest way to say "just over".
+
 ## 2026-10-24 — Tasks 2.2 and 2.3: the MCP server inside Claude Code
 
 Added the server with `claude mcp add --scope project` (creates `.mcp.json`); `claude mcp list`
