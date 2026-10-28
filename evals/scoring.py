@@ -82,17 +82,18 @@ def check_number(answer: str, value: float, tolerance: float) -> bool:
                for n in extract_numbers(answer))
 
 
-def _has(text: str, phrase: str) -> bool:
+def has_phrase(text: str, phrase: str) -> bool:
+    """phrase appears in text as a whole word or phrase, ignoring case."""
     pattern = rf"(?<![A-Za-z0-9_]){re.escape(normalize(phrase))}(?![A-Za-z0-9_])"
     return re.search(pattern, normalize(text), re.IGNORECASE) is not None
 
 
 def check_mentions(answer: str, values: list[str]) -> bool:
-    return all(_has(answer, v) for v in values)
+    return all(has_phrase(answer, v) for v in values)
 
 
 def check_mentions_any(answer: str, values: list[str]) -> bool:
-    return any(_has(answer, v) for v in values)
+    return any(has_phrase(answer, v) for v in values)
 
 
 def is_refusal(answer: str) -> bool:

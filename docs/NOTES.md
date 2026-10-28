@@ -3,6 +3,36 @@
 Running log of what we tried, what broke, and what we changed (with before/after numbers
 where there are any). Newest first.
 
+## 2026-10-27 — Tasks 5.1–5.3: morning brief and its eval
+
+`python evals/brief_eval.py`: 6 briefs (sample fund 10-21 and 10-22, plus the 4 planted
+scenario days), Claude Opus 5.5, effort medium, $0.58.
+
+| Day | Planted events | Found | False alarms | Headline leads with top event | Made-up numbers |
+|---|---|---|---|---|---|
+| sample 10-21 | NVDA warning | 1/1 | 0 | yes | 0 |
+| sample 10-22 | NVDA breach, NVDA +10%, UNH −8% | 3/3 | 0 | yes | 1 |
+| quiet | none | 0/0 | 0* | yes | 0 |
+| big_move | META −9% | 1/1 | 0 | yes | 0 |
+| single_breach | MSFT breach, MSFT +10% | 2/2 | 0* | yes | 0 |
+| two_events | MSFT breach, MSFT +10%, TSLA −10% | 3/3 | 0 | yes | 0 |
+
+Event recall 100%, headline ranking 100%, false alarms 0, 1 of 6 briefs with a made-up number.
+
+\* The first scoring reported 2 false alarms ("The limit check found 0 breaches and 0
+warnings."). Both were scorer mistakes: "0" wasn't treated like "no". Fixed with a test, and
+the saved briefs re-scored offline (no new API calls): 0 false alarms.
+
+**The one real issue:** the 10-22 brief said every other holding "changed by less than 0.15
+points", a cut-off the model made up. Same habit the Q&A eval found in 4.4; the brief prompt
+says "no cut-offs" but, unlike the Q&A prompt now, gives no concrete example. Next: add the
+example to BRIEF_PROMPT rule 1 and rerun the brief eval (one run per day, so check over
+repeats).
+
+Also seen: for the NVDA breach the brief tested a $500,000 sale (NVDA to 14.22%, inside the
+limit but still a warning); the spec's example was ~$1M (13.23%, no flag). Both are allowed:
+the spec asks for a trade that brings the breach back inside its limit.
+
 ## 2026-10-27 — Task 4.4: first improvement loop (eval round 1)
 
 35 cases, Claude Opus 5.5, effort medium. Full results in `evals/results/`, summary rows in

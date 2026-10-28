@@ -1,0 +1,56 @@
+name: Morning brief
+
+# Manual trigger only until real data arrives (M6, SPEC §9): on the sample data the latest date
+# never changes, so a daily run would write the same brief and spend API credit every day.
+# After M6, add the schedule below: 12:00 UTC on weekdays = 7am EST / 8am EDT, before the US
+# market opens either way (GitHub cron is always UTC and ignores daylight saving).
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio:
+        description: "Portfolio name"
+        default: "sample_fund"
+        required: true
+      date:
+        description: "Brief date, YYYY-MM-DD (leave empty for the latest price date)"
+        required: false
+  # schedule:
+  #   - cron: "0 12 * * 1-5"
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Write the brief
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}  # optional: post to Slack if set
+          # Inputs go through env, not straight into the script, so a crafted input
+          # can't inject shell commands.
+          PORTFOLIO: ${{ inputs.portfolio }}
+          BRIEF_DATE: ${{ inputs.date }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Add an ANTHROPIC_API_KEY secret: repo Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          args=(--portfolio "$PORTFOLIO")
+          if [ -n "$BRIEF_DATE" ]; then args+=(--date "$BRIEF_DATE"); fi
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then args+=(--slack); fi
+          python -m pm_agent.brief "${args[@]}"
+
+      - name: Save the brief as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: morning-brief-${{ inputs.portfolio }}-${{ github.run_number }}
+          path: briefs/

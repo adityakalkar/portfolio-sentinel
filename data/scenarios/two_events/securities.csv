@@ -1,0 +1,26 @@
+ticker,name,sector
+NVDA,NVIDIA Corp,Information Technology
+AAPL,Apple Inc,Information Technology
+MSFT,Microsoft Corp,Information Technology
+AVGO,Broadcom Inc,Information Technology
+ORCL,Oracle Corp,Information Technology
+AMD,Advanced Micro Devices,Information Technology
+INTC,Intel Corp,Information Technology
+GOOGL,Alphabet Inc,Communication Services
+META,Meta Platforms,Communication Services
+AMZN,Amazon.com Inc,Consumer Discretionary
+TSLA,Tesla Inc,Consumer Discretionary
+LLY,Eli Lilly and Co,Health Care
+UNH,UnitedHealth Group,Health Care
+JNJ,Johnson & Johnson,Health Care
+ABBV,AbbVie Inc,Health Care
+JPM,JPMorgan Chase,Financials
+V,Visa Inc,Financials
+MA,Mastercard Inc,Financials
+PG,Procter & Gamble,Consumer Staples
+COST,Costco Wholesale,Consumer Staples
+KO,Coca-Cola Co,Consumer Staples
+CAT,Caterpillar Inc,Industrials
+GE,GE Aerospace,Industrials
+XOM,Exxon Mobil,Energy
+CVX,Chevron Corp,Energy

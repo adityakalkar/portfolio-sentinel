@@ -88,11 +88,11 @@ criteria pass and the change has been reviewed.
 
 ## M5 — Morning brief
 
-- [ ] **5.1 Brief generator** — `src/pm_agent/brief.py` per SPEC §9, saves markdown.
+- [x] **5.1 Brief generator** — `src/pm_agent/brief.py` per SPEC §9, saves markdown.
   - **Done when:** the brief for 2026-10-22 leads with the NVDA breach and mentions the UNH drop.
-- [ ] **5.2 Scenario days** — extend the data generator with planted-event scenarios (breach,
+- [x] **5.2 Scenario days** — extend the data generator with planted-event scenarios (breach,
   big move, quiet day, two events at once) in a separate data dir.
-- [ ] **5.3 Brief eval** — event recall, false alarms on quiet days, number accuracy, ranking.
+- [x] **5.3 Brief eval** — event recall, false alarms on quiet days, number accuracy, ranking.
 - [ ] **5.4 Schedule it** — `.github/workflows/morning-brief.yml` with manual
   `workflow_dispatch` only until M6 (see SPEC §9); add the `0 12 * * 1-5` cron after real data
   lands. API key from GitHub Secrets, brief saved as a workflow artifact.
