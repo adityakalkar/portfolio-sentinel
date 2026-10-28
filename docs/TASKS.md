@@ -93,10 +93,10 @@ criteria pass and the change has been reviewed.
 - [x] **5.2 Scenario days** — extend the data generator with planted-event scenarios (breach,
   big move, quiet day, two events at once) in a separate data dir.
 - [x] **5.3 Brief eval** — event recall, false alarms on quiet days, number accuracy, ranking.
-- [ ] **5.4 Schedule it** — `.github/workflows/morning-brief.yml` with manual
+- [x] **5.4 Schedule it** — `.github/workflows/morning-brief.yml` with manual
   `workflow_dispatch` only until M6 (see SPEC §9); add the `0 12 * * 1-5` cron after real data
   lands. API key from GitHub Secrets, brief saved as a workflow artifact.
-- [ ] **5.5 Delivery** — Slack incoming webhook or email (secret in GitHub Secrets).
+- [x] **5.5 Delivery** — Slack incoming webhook or email (secret in GitHub Secrets).
 
 ## M6 — Real data
 

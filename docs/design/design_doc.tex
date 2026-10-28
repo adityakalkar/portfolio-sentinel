@@ -54,7 +54,7 @@
 
 \title{\textbf{Portfolio Sentinel}\\[0.3em]\large Design Document: concepts, architecture, and decisions}
 \author{Aditya Kalkar}
-\date{Last updated: 2026-10-27 (through milestone M4)}
+\date{Last updated: 2026-10-27 (through milestone M5)}
 
 \begin{document}
 \maketitle
@@ -151,7 +151,7 @@ Read it bottom-up:
   \item[Agent (built in M3)] A loop we write by hand: send the question and tool list to Claude;
         if Claude asks for a tool, run it through MCP and send back the result; repeat until
         Claude gives a final answer.
-  \item[Evals (built in M4) and morning brief (M5)] Built on top of the agent.
+  \item[Evals (built in M4) and morning brief (built in M5)] Built on top of the agent.
 \end{description}
 
 \begin{whyitmatters}[Why layers?]
@@ -176,8 +176,8 @@ M2a & MCP server with 8 tools (task 2.1), tested in-process and over stdio & Don
 M2b & Connected to Claude Code; tool description pass (tasks 2.2, 2.3) & Done \\
 M3  & Hand-written agent loop, system prompt, run logging & Done \\
 M4  & Eval harness: test cases, scoring, results history & Done \\
-M5  & Morning brief, scenario evals, scheduling, delivery & Next \\
-M6  & Real data (ETF holdings, SEC 13F filings, prices) & \\
+M5  & Morning brief, scenario evals, scheduling, delivery & Done \\
+M6  & Real data (ETF holdings, SEC 13F filings, prices) & Next \\
 M7  & Streamlit UI, metrics dashboard, deploy, demo & \\
 M8  & Stretch goals (model comparison, prompt-injection tests, ...) & \\
 \bottomrule
@@ -871,6 +871,47 @@ schedule, or manual), \textbf{jobs} that run on a virtual machine (a \textbf{run
 \textbf{steps} inside each job. Steps either \code{uses:} a pre-built action (such as checking
 out the code) or \code{run:}s a shell command. It is free for public repos. We use it for CI
 now and for the scheduled morning brief in M5.
+
+\subsection{Secrets, manual triggers, artifacts, and cron (added in M5)}
+
+\begin{description}[style=nextline]
+  \item[GitHub Secrets] An encrypted store for passwords and keys, per repository (Settings
+        $\to$ Secrets and variables $\to$ Actions). A workflow reads one as
+        \code{${{ secrets.NAME }}}; GitHub hides its value in logs, and nobody can read it back
+        after saving it, not even the owner. Ours: \code{ANTHROPIC_API_KEY} and
+        \code{SLACK_WEBHOOK_URL}. They were set with \code{gh secret set}, fed straight from
+        \code{.env} so the value never appeared on screen.
+  \item[\code{workflow_dispatch}] A trigger that adds a ``Run workflow'' button to the
+        Actions tab (or \code{gh workflow run} from the terminal), with optional inputs such as
+        the portfolio and date.
+  \item[Artifact] A file a workflow run saves for download from the run's page; ours is the
+        brief's Markdown, kept for 90 days.
+  \item[cron] A compact way to write a schedule: five fields for minute, hour, day of month,
+        month, and day of week. \code{0 12 * * 1-5} means minute 0, hour 12, any day of the
+        month, any month, Monday to Friday: 12:00 UTC on weekdays. GitHub's cron is always in
+        UTC and ignores daylight saving, so 12:00 UTC is 7am in New York in winter and 8am in
+        summer; either way, before the 9:30am market open.
+  \item[Script injection] If a workflow pastes a user-supplied input straight into a shell
+        command, a cleverly written input could run commands of its own. Passing inputs
+        through environment variables (\code{BRIEF_DATE: ${{ inputs.date }}}, then
+        \code{"$BRIEF_DATE"} in the script) keeps them as plain text.
+\end{description}
+
+\subsection{Slack incoming webhooks (added in M5)}
+
+An \textbf{incoming webhook} is a private web address tied to one Slack channel: whatever
+JSON is POSTed to it appears as a message there. There is no login step, which is why the
+address itself must stay secret: anyone who has it can post to the channel. Sending one is a
+single HTTP request, done here with Python's built-in \code{urllib}:
+
+\begin{lstlisting}[style=py]
+request = urllib.request.Request(url, data=json.dumps({"text": text}).encode(),
+                                 method="POST", headers={"Content-Type": "application/json"})
+\end{lstlisting}
+
+Slack's formatting (``mrkdwn'') differs from Markdown: bold is \code{*one star*}, and there
+are no \texttt{\#} headings. So the brief is converted on the way: the headline becomes a bold
+line and \code{**bold**} becomes \code{*bold*}.
 
 % =====================================================================
 \part{Milestone log}
@@ -2461,6 +2502,215 @@ round showed how to read results honestly: check flagged answers by hand, and wh
 rerun it before blaming the change.
 \end{takeaway}
 
+% ---------------------------------------------------------------------
+\section{M5: the morning brief}
+
+\subsection{Goal}
+
+Tasks 5.1 to 5.5: the agent working on its own. Before the market opens, it writes a short
+note on what changed overnight and what needs attention, and posts it to Slack. Then prove the
+brief finds what matters, using practice days where we planted the events ourselves.
+
+\subsection{What was built}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{File} & \textbf{What it does} \\
+\midrule
+\code{src/pm_agent/brief.py}    & writes and saves the brief; \code{--slack} posts it (5.1) \\
+\code{src/pm_agent/prompts.py}  & adds \code{BRIEF_PROMPT}, the brief-writing instructions (5.1) \\
+\code{scripts/make_sample_data.py} & now also writes 4 practice days to \code{data/scenarios/} (5.2) \\
+\code{evals/brief_eval.py}, \code{brief_scoring.py} & writes and grades briefs for 6 days (5.3) \\
+\code{.github/workflows/morning-brief.yml} & runs the brief on GitHub with a button (5.4) \\
+\code{src/pm_agent/delivery.py} & posts to Slack (5.5) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{The brief is the same agent with different instructions (5.1)}
+
+There is no second loop. \code{brief.py} calls \code{run_agent} with a different system
+prompt and a request like ``Write the morning brief for portfolio sample\_fund for
+2026-10-22''. Everything built in M2 to M4 (the tools, the loop, the logging, the number
+rules) is reused. The brief prompt follows SPEC~\S9:
+
+\begin{itemize}
+  \item \textbf{Start broad}: check the limits, the overnight moves, and the sector picture;
+        then dig deeper only where something stands out.
+  \item \textbf{Format}: a one-line headline, then 3 to 5 numbered items ranked breaches
+        first, then warnings, then the biggest moves.
+  \item \textbf{Calm days stay calm}: ``calm'' means no breaches, not no flags. A warning gets
+        one line, without drama, and a day with nothing notable says so instead of padding.
+  \item \textbf{Breaches get a tested fix, stated as a fact}: the agent tries a sale with
+        \code{simulate_trades} and reports the result (``Selling \$1,000,000 of NVDA would
+        bring it to 13.23\%, inside the 15.0\% limit''), never as advice.
+\end{itemize}
+
+That last point needed one change to the number rule. Choosing a sale size to test is a
+number the model picks, so the brief prompt allows ``a trade size you tested with
+\code{simulate_trades}''. The made-up-number check accepts it for the same reason: the size is
+in the tool's input, which the check counts as a source.
+
+Bad input fails \emph{before} any API call: \code{write_brief} loads the portfolio and checks
+the date first, so a typo costs nothing.
+
+\textbf{The 2026-10-22 brief} (written on GitHub, then posted to Slack):
+
+\begin{lstlisting}[style=plain]
+# 1 limit breach: NVDA at 15.2% vs a 15.0% limit
+
+1. NVDA is over its position limit. NVDA rose 10.0% overnight, taking its weight from
+   14.0% to 15.2% ... In a tested trade, selling $1,000,000 of NVDA would bring it to
+   13.23%, inside the 15.0% limit. That trade clears the breach without creating any
+   new flags ...
+2. No warnings. ...
+3. UNH fell sharply. UnitedHealth dropped 8.0%, so its weight fell from 3.5% to 3.18% ...
+4. Sector bets are small. ...
+\end{lstlisting}
+
+The 2026-10-21 brief opens ``\# No limit breaches; NVDA at 14.0\% is close to its 15.0\%
+position limit'': the calm-with-a-warning tone the spec asks for.
+
+\subsection{Practice days (5.2)}
+
+To grade a brief you need days where you \emph{know} what should be reported. The data
+generator now writes four extra datasets, each a copy of the sample fund with its own planted
+events on the last day:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{Day} & \textbf{What's planted} \\
+\midrule
+\code{quiet}         & nothing: no stock near a limit, only tiny price moves \\
+\code{big_move}      & META falls 9\%; no limit is close \\
+\code{single_breach} & MSFT rises 10\% and breaks its 15\% position limit \\
+\code{two_events}    & the MSFT breach and TSLA falling 10\%, the same night \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Each day moves some weight between NVDA and MSFT so the right stock is, or isn't, near its
+limit (on the quiet day both sit at 12\%, safely under the 13.5\% warning line). The same
+seeded random noise is used, and the generator refactor left the original sample data
+byte-for-byte unchanged (checked with git). A test checks each day has \emph{exactly} its
+planted events: these flags and these big moves, nothing else.
+
+\subsection{Grading the brief (5.3)}
+
+For each of 6 days (the sample fund's 10/21 and 10/22, plus the four practice days),
+\code{brief_eval.py} computes the expected events from the data (breaches, warnings, and
+price moves of 5\% or more), writes a brief, and scores it:
+
+\begin{description}[style=nextline]
+  \item[Event recall] Share of expected events the brief mentions.
+  \item[False alarms] Sentences that claim a breach or warning about something that has none.
+        Sentences with ``no'', ``0'', ``inside'', ``would'', and similar words are not claims:
+        ``No warnings'' and ``selling would bring it inside the limit'' are fine.
+  \item[Ranking] The headline leads with the most important event, or, on a day with none,
+        says so.
+  \item[Made-up numbers] The same check as the question eval.
+\end{description}
+
+\begin{center}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Day} & \textbf{Events found} & \textbf{False alarms} & \textbf{Headline OK} & \textbf{Made-up} \\
+\midrule
+sample 10/21   & 1/1 & 0 & yes & 0 \\
+sample 10/22   & 3/3 & 0 & yes & 1 \\
+quiet          & 0/0 & 0 & yes & 0 \\
+big\_move      & 1/1 & 0 & yes & 0 \\
+single\_breach & 2/2 & 0 & yes & 0 \\
+two\_events    & 3/3 & 0 & yes & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Every planted event was found, no false alarms, every headline right; \$0.58 for all six. Two
+lessons came from reading the results by hand rather than trusting the totals:
+
+\begin{itemize}
+  \item \textbf{The first scoring showed 2 false alarms, and both were the scorer's fault.}
+        ``The limit check found 0 breaches and 0 warnings'' is a calm sentence, but the
+        scorer didn't treat ``0'' like ``no''. It was fixed with a test, and the saved briefs
+        were re-scored without new API calls.
+  \item \textbf{The one made-up number was real}: ``every other holding's weight changed by less
+        than 0.15 points'', a cut-off the model invented. It is the same habit the question
+        eval found in M4; the brief prompt says ``no cut-offs'' but lacks the concrete example
+        that fixed it there. Logged as the next change.
+\end{itemize}
+
+\subsection{Running it on GitHub and posting to Slack (5.4, 5.5)}
+
+The workflow has a ``Run workflow'' button (and \code{gh workflow run}). It installs the
+project on a fresh GitHub machine, writes the brief with the API key from GitHub Secrets,
+posts it to Slack if a webhook secret exists, and saves the brief as a downloadable artifact.
+It is \textbf{manual only} for now: on sample data the latest date never changes, so a daily
+schedule would write the same brief every day and spend money doing it. The schedule line
+(\code{0 12 * * 1-5}) is already in the file, commented out, for when real data arrives in M6.
+
+Both secrets were copied from \code{.env} into GitHub with \code{gh secret set}, without the
+values ever being printed. Twice, a secret was accidentally pasted into \code{.env.example}
+(the committed template) instead of \code{.env}; both times it was caught before any commit
+by checking \code{git status} and searching for the value's prefix, then moved and the
+template restored.
+
+\subsection{Decisions and why}
+
+\begin{enumerate}
+  \item \textbf{Reuse the agent; change only the prompt.} One loop to test and maintain.
+  \item \textbf{Practice days are full datasets} pointed to with \code{PM_AGENT_DATA_DIR}, so
+        nothing in the agent or the tools needed to change to use them.
+  \item \textbf{Expected events computed from the data}, like the question eval's answer key,
+        with a test that the data contains exactly the planted events.
+  \item \textbf{Simple text rules for grading}, not an AI judge: cheap and repeatable, at the
+        price of some edge cases (like ``0 breaches''), which tests then pin down.
+  \item \textbf{Slack via the standard library} (\code{urllib}), no Slack SDK: one HTTP request
+        doesn't justify a dependency.
+  \item \textbf{Manual trigger until real data}, as the spec decided in the review.
+  \item \textbf{Inputs passed to the workflow script through environment variables}, to rule
+        out script injection.
+\end{enumerate}
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item New tests, all with fakes and no API or network calls: the brief writer (5), the
+        practice days (5), brief scoring (11), Slack delivery (5). Each seen failing first.
+  \item Live briefs for 10/21 and 10/22 checked by hand against SPEC~\S9 (task 5.1's
+        ``done when'': the 10/22 brief leads with the NVDA breach and mentions UNH).
+  \item The brief eval over 6 days; every flagged item read by hand.
+  \item The workflow run on GitHub twice: the first produced the artifact, the second also
+        posted to Slack. A free test post of a saved brief came first.
+  \item Full suite: 133 passed. API spend for M5: about \$1.
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item Why is the brief the same agent with a different prompt, rather than new code?
+  \item Why does the brief prompt allow one kind of number the question prompt doesn't?
+  \item What makes a practice day useful for testing, and why must it contain \emph{exactly}
+        its planted events?
+  \item The first brief eval reported two false alarms. What were they, and what does that
+        teach about reading eval results?
+  \item Why is the workflow manual-only until M6?
+  \item What does \code{0 12 * * 1-5} mean, and why 12:00 UTC?
+  \item Why must a Slack webhook URL be kept secret?
+  \item Why are workflow inputs passed through environment variables?
+\end{enumerate}
+\end{reviewq}
+
+\begin{takeaway}
+The morning brief reuses everything built so far: the same tools, loop and number rules, with
+new instructions. Practice days with planted events turned ``does the brief find what
+matters?'' into a score: every planted event found, no false alarms, the most important item
+first. The brief now runs on GitHub with a button and lands in Slack. Reading flagged results by
+hand mattered again: two ``false alarms'' were the scorer's mistake, and the one real issue was
+the same made-up-cut-off habit seen in M4.
+\end{takeaway}
+
 % =====================================================================
 \appendix
 \section{Glossary}
@@ -2468,20 +2718,25 @@ rerun it before blaming the change.
 \begin{description}[style=sameline,leftmargin=3.2cm]
   \item[Active weight] Portfolio weight minus benchmark weight.
   \item[Agent] An LLM in a loop that can call tools until it reaches an answer.
+  \item[Artifact] A file a GitHub workflow run saves for download.
   \item[Baseline] The first eval run, unchanged; later runs are compared to it.
   \item[Benchmark] The index a fund is compared against.
   \item[Breach] A limit exceeded.
   \item[CI] Continuous integration: automatic tests on every push.
   \item[Context manager] An object used with \code{with} that runs setup and cleanup around a block.
+  \item[cron] A five-field schedule, e.g. \code{0 12 * * 1-5} = 12:00 UTC on weekdays.
   \item[Dataclass] A Python class that just holds typed fields; \code{frozen} makes it immutable.
   \item[DataFrame] A pandas table with named columns.
   \item[Decorator] A function applied with \code{@name} that registers or wraps another function.
   \item[Effort] How much the model reasons before answering (low to max); trades cost for depth.
   \item[Eval] A scored test suite for AI behaviour.
+  \item[Event recall] Share of planted events a brief mentions.
   \item[Fake (test double)] A scripted stand-in for something costly, used in tests.
+  \item[False alarm] A brief claiming a breach or warning that isn't there.
   \item[Flag identity] A flag's (rule, subject) pair, used to compare flags before and after a trade.
   \item[Flaky case] An eval question that passes on some runs and fails on others.
   \item[Gross exposure] Long minus short: the total size of all bets.
+  \item[GitHub Secrets] Encrypted per-repo storage for keys a workflow can use.
   \item[GICS] The standard scheme for classifying companies into sectors.
   \item[Hallucinated number] A number in an answer that no tool result contains.
   \item[Harness] The program around the model: loop, logging, limits.
@@ -2493,11 +2748,13 @@ rerun it before blaming the change.
   \item[.mcp.json] The committed file listing a project's MCP servers for Claude Code.
   \item[JSON Lines] A file with one JSON object per line; easy to append to.
   \item[MCP] Model Context Protocol: a standard for exposing tools to AI.
+  \item[Morning brief] The agent's daily pre-market note on what changed and what needs attention.
   \item[Messages API] Anthropic's endpoint for conversations with Claude.
   \item[Mutation check] Breaking code or data on purpose to prove a test can fail.
   \item[NAV] Net asset value: market values plus cash.
   \item[Net exposure] Long plus short: the direction of the market bet.
   \item[PATH] The list of folders the shell searches for commands.
+  \item[Practice day] A dataset with events planted on purpose, to grade the brief.
   \item[Pre-trade check] Simulating a trade and checking limits before placing it.
   \item[Pure function] Output depends only on inputs; no files, network, or side effects.
   \item[Refusal fallback] Retrying a declined request on another model, server-side.
@@ -2505,6 +2762,7 @@ rerun it before blaming the change.
   \item[Seed] The starting value for a random number generator.
   \item[Server instructions] Guidance an MCP server sends once, for every tool.
   \item[SQLite] A database in a single file, built into Python.
+  \item[Slack webhook] A secret URL that posts whatever it receives into one Slack channel.
   \item[Short] Selling borrowed shares; profits when the price falls.
   \item[Stable sort] A sort that keeps tied items in their original order.
   \item[Stop reason] Why the model stopped: \code{tool_use}, \code{end_turn}, ...
@@ -2532,6 +2790,9 @@ python -m pm_agent.mcp_server       # run the MCP server over stdio
 python -m pm_agent.agent "..."      # ask the agent a question (uses the API)
 python evals/build_cases.py         # regenerate evals/cases.json
 python evals/run.py --limit 3       # eval a few cases (cents); no flags = all 35
+python -m pm_agent.brief [--slack]  # write today's brief (and post it to Slack)
+python evals/brief_eval.py          # grade the brief on 6 planted days (~$0.60)
+gh workflow run morning-brief.yml   # run the brief on GitHub
 
 git status                          # what changed?
 git diff                            # show the changes
