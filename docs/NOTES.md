@@ -3,6 +3,35 @@
 Running log of what we tried, what broke, and what we changed (with before/after numbers
 where there are any). Newest first.
 
+## 2026-10-27 — M6: real data (Berkshire Hathaway 13F vs the S&P 500)
+
+`scripts/make_real_data.py` builds `data/real/`: Berkshire's 13F for 2026-06-30 (29 stocks,
+$299B as filed), the S&P 500 from the iShares IVV holdings file (503 stocks, as of
+2026-10-26), and 85 days of Yahoo Finance closes. The morning brief now runs on it every
+weekday at 12:00 UTC.
+
+Snags and how they were handled:
+- **iShares serves its CSV only to browsers**, so it's downloaded by hand into `data/raw/`.
+- **13Fs use CUSIPs, not tickers.** OpenFIGI mapped 28 of 29; Chubb (Swiss-registered, so a
+  CINS code) was added by hand as CB. The reviewed list is `data/real/cusip_tickers.csv`.
+- **One stock, several rows**: Berkshire reports each holding once per sub-manager (89 rows
+  for 29 stocks), so rows are added up by CUSIP. Options and bonds would be skipped (none here).
+- **Share-class spellings differ**: LEN/B (OpenFIGI), BRK-B (Yahoo), BRK B (iShares). One
+  canonical form, BRK.B, converted for Yahoo at download time.
+- **9 holdings aren't in the S&P 500** (e.g. Ally, Jefferies, SiriusXM), so their sectors
+  come from Yahoo, whose sector names differ from GICS ("Financial Services" vs
+  "Financials"); a small mapping table converts them.
+- **A 13F has no cash**: assumed 2% of NAV.
+
+**Limits decision.** Under the sample fund's limits (15% per stock, 5% / 8% versus the
+index), Berkshire showed 15 breaches and 2 warnings, almost all saying "this isn't the S&P
+500" (no NVDA or MSFT, a big Financials overweight). That would repeat in every brief and bury
+real changes. Chosen instead: max 25% per stock (the US tax diversification rule for funds),
+20% stock / 25% sector versus the index. Result on 2026-10-27: one warning, AAPL at 24.67% of
+the fund against its 25% cap. The first real brief led with exactly that.
+
+`yfinance` is an optional extra (`pip install -e ".[real]"`), used only to rebuild data.
+
 ## 2026-10-27 — Tasks 5.1–5.3: morning brief and its eval
 
 `python evals/brief_eval.py`: 6 briefs (sample fund 10-21 and 10-22, plus the 4 planted

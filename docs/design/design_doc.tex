@@ -54,7 +54,7 @@
 
 \title{\textbf{Portfolio Sentinel}\\[0.3em]\large Design Document: concepts, architecture, and decisions}
 \author{Aditya Kalkar}
-\date{Last updated: 2026-10-27 (through milestone M5)}
+\date{Last updated: 2026-10-27 (through milestone M6)}
 
 \begin{document}
 \maketitle
@@ -177,8 +177,8 @@ M2b & Connected to Claude Code; tool description pass (tasks 2.2, 2.3) & Done \\
 M3  & Hand-written agent loop, system prompt, run logging & Done \\
 M4  & Eval harness: test cases, scoring, results history & Done \\
 M5  & Morning brief, scenario evals, scheduling, delivery & Done \\
-M6  & Real data (ETF holdings, SEC 13F filings, prices) & Next \\
-M7  & Streamlit UI, metrics dashboard, deploy, demo & \\
+M6  & Real data (ETF holdings, SEC 13F filings, prices) & Done \\
+M7  & Streamlit UI, metrics dashboard, deploy, demo & Next \\
 M8  & Stretch goals (model comparison, prompt-injection tests, ...) & \\
 \bottomrule
 \end{tabularx}
@@ -392,6 +392,34 @@ the system simulates it and checks the result against the fund's limits. Our
 \$180.00 to \$198.00: $198/180 - 1 = 0.10 = +10\%$. The fund's own return is roughly the
 weighted sum of its positions' returns. NVDA at 14\% weight rising 10\% adds about
 $0.14 \times 10\% = 1.4\%$ to the fund.
+
+\subsection{Where real portfolio data comes from (added in M6)}
+
+\begin{description}[style=nextline]
+  \item[13F filing] In the US, any investment manager controlling more than \$100 million in US
+        stocks must file a ``Form 13F'' with the SEC (the Securities and Exchange Commission,
+        the market regulator) every quarter, listing the stocks it holds and how many shares.
+        Filings are public and free on the SEC's \textbf{EDGAR} website. Limits: they arrive up
+        to 45 days after the quarter ends, they list only long positions in US stocks (no cash,
+        no shorts, no foreign stocks), and they are a snapshot, not a live view.
+  \item[CUSIP] A 9-character code that identifies a security in North America, e.g.
+        \code{037833100} for Apple. 13F filings use CUSIPs, not ticker symbols, so they have to
+        be translated. Non-US companies have a similar code called a CINS (Chubb's starts with
+        an ``H'' for Switzerland).
+  \item[ETF] An exchange-traded fund: a fund that trades on the stock market like a single
+        share. Many ETFs simply hold every stock in an index. The iShares Core S\&P 500 ETF
+        (ticker IVV) holds all of the S\&P 500, and publishes its full holdings every day, which
+        makes it a free, convenient stand-in for the index's weights.
+  \item[Share classes] Some companies issue more than one kind of share (Alphabet's GOOGL and
+        GOOG; Berkshire's BRK.A and BRK.B), usually differing in voting rights. Each class has
+        its own ticker and price and counts as a separate holding. Different data providers
+        spell them differently (\code{BRK.B}, \code{BRK-B}, \code{BRK B}), so the code picks one
+        spelling and converts.
+  \item[Concentrated fund] A fund that holds a few large positions on purpose, rather than
+        spreading money across hundreds of stocks like an index. Berkshire's 13F has 29 stocks,
+        with Apple alone about a quarter of the value. Such a fund isn't trying to track an
+        index, so tight ``don't differ from the index'' limits make little sense for it.
+\end{description}
 
 % ---------------------------------------------------------------------
 \section{AI, agents, and MCP primer}
@@ -871,6 +899,29 @@ schedule, or manual), \textbf{jobs} that run on a virtual machine (a \textbf{run
 \textbf{steps} inside each job. Steps either \code{uses:} a pre-built action (such as checking
 out the code) or \code{run:}s a shell command. It is free for public repos. We use it for CI
 now and for the scheduled morning brief in M5.
+
+\subsection{Downloading data politely, and reading XML (added in M6)}
+
+\begin{description}[style=nextline]
+  \item[User-Agent] Every web request carries a \code{User-Agent} header saying what made it.
+        The SEC asks automated programs to put a contact email there (``pm-agent research
+        you@example.com''), so they can get in touch instead of blocking you, and limits each
+        user to 10 requests per second. Ours sends one request every 0.2 seconds at most.
+  \item[Rate limits and caching] Free services cap how often you may ask (OpenFIGI: 25
+        requests a minute without a key). The import script saves every download in
+        \code{data/raw/} and reuses it, so a rerun asks only for what's new (for prices, just
+        the days since the last download).
+  \item[Browser-only downloads] Some sites serve files only to real browsers and send scripts a
+        web page instead (iShares did). The honest fix is a manual download, as the spec
+        planned, not pretending to be a browser.
+  \item[XML] A text format of nested, named tags, like
+        \code{<cusip>037833100</cusip>}. 13F holdings are XML. Python's built-in
+        \code{xml.etree.ElementTree} reads it; the one catch is the \emph{namespace}, a URL
+        attached to every tag name, which must be included when searching for tags.
+  \item[Optional dependency] A library installed only when asked for, as an ``extra'':
+        \code{pip install -e ".[real]"} adds \code{yfinance}. Only the data-building script
+        needs it, so the tests and the agent install without it.
+\end{description}
 
 \subsection{Secrets, manual triggers, artifacts, and cron (added in M5)}
 
@@ -2711,11 +2762,155 @@ hand mattered again: two ``false alarms'' were the scorer's mistake, and the one
 the same made-up-cut-off habit seen in M4.
 \end{takeaway}
 
+% ---------------------------------------------------------------------
+\section{M6: real data}
+
+\subsection{Goal}
+
+Tasks 6.1 to 6.3: replace the made-up fund with a real one. Real holdings (Berkshire
+Hathaway's 13F filing), a real benchmark (the S\&P 500), real daily prices. Then switch on the
+daily schedule, since each weekday now brings genuinely new data.
+
+\subsection{What was built}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{File} & \textbf{What it does} \\
+\midrule
+\code{src/pm_agent/importers.py} & pure parsing: 13F XML, iShares CSV, ticker spellings, sector names \\
+\code{scripts/make_real_data.py} & downloads (with caching) and writes \code{data/real/} \\
+\code{data/real/}                & the real dataset, same format as \code{data/sample/} \\
+\code{data/real/cusip_tickers.csv} & the reviewed CUSIP $\to$ ticker list \\
+\code{tests/test_importers.py}, \code{test_real_data.py} & 12 tests, no network \\
+\code{.github/workflows/morning-brief.yml} & now scheduled on weekdays, on real data \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Because \code{data/real/} uses exactly the same four files as the sample data, \textbf{nothing in
+the agent, the tools, or the brief changed}. Pointing \code{PM_AGENT_DATA_DIR} at the new
+folder is enough. That payoff comes from the M1 decision that \code{data.py} is the only code
+that reads files.
+
+\subsection{From raw downloads to our format}
+
+\begin{lstlisting}[style=plain]
+SEC EDGAR 13F (XML) ---> parse_13f_infotable ---> attach_tickers ---> portfolio_json
+                                                  (cusip_tickers.csv)    (+2% cash, limits)
+iShares IVV (CSV) -----> parse_ishares_holdings ---> benchmark weights + sectors
+Yahoo Finance ---------> update_prices (cached) ---> prices.csv
+                         sectors_from_yahoo ------> sectors for the 9 non-S&P holdings
+\end{lstlisting}
+
+The parsing functions in \code{importers.py} are pure (text in, tables out), so they are tested
+with small inline samples; the script around them does the downloading and file writing.
+
+\textbf{The snags real data brought}, each handled in one place:
+
+\begin{itemize}
+  \item \textbf{One stock, many rows.} Berkshire reports each holding once per sub-manager: 89
+        rows for 29 stocks. Rows are added up by CUSIP.
+  \item \textbf{Codes, not tickers.} OpenFIGI, a free lookup service, matched 28 of 29 CUSIPs.
+        Chubb, registered in Switzerland, was added by hand as CB, with the reason written
+        next to it in the mapping file. A missing CUSIP stops the build with a message,
+        rather than silently dropping a holding.
+  \item \textbf{Three spellings of one share class}: \code{LEN/B}, \code{BRK-B}, \code{BRK B}.
+        One canonical form (\code{BRK.B}), converted back for Yahoo only at download time.
+  \item \textbf{Not everything in the ETF file is a stock}: cash, collateral, a warrant, and one
+        unlisted share are dropped. Weights are recomputed from market values so they add up
+        to exactly 1.
+  \item \textbf{Two sector vocabularies}: iShares writes ``Communication'' and Yahoo writes
+        ``Financial Services''; both are mapped to the GICS names.
+  \item \textbf{No cash in a 13F}: assumed 2\% of NAV, stated in the README.
+\end{itemize}
+
+\subsection{Choosing the limits}
+
+The first run used the sample fund's limits and produced \textbf{15 breaches and 2 warnings}.
+Almost all of them said the same thing in different ways: Berkshire isn't the S\&P 500. It owns
+no Nvidia or Microsoft (so Technology is 12.7 points underweight), and it is 18.5 points
+overweight in Financials. True, but not news: the brief would repeat it every morning and bury
+anything that actually changed.
+
+Berkshire is a concentrated fund that doesn't try to track the index, so it got limits that
+match: at most 25\% in one stock (the same 25\% as a real US tax rule for funds), and wide
+limits versus the index (20 points per stock, 25 per sector). The result on 2026-10-27 was one
+warning, \textbf{Apple at 24.67\% against its 25\% cap}, which is a real, specific thing for a
+manager to watch. The first real brief led with exactly that:
+
+\begin{lstlisting}[style=plain]
+# No limit breaches; one warning: AAPL at 24.67% against its 25.0% position limit
+1. AAPL warning. AAPL is 24.67% of NAV, close to the 25.0% single-position limit. Its
+   weight went up 0.3 percentage points overnight, from 24.38%, after a 0.93% price gain.
+2. Biggest overnight moves. KO fell 1.64% ... OXY fell 2.09% ...
+\end{lstlisting}
+
+The decision was made after seeing the numbers, which is worth being honest about: the limits
+were chosen to suit the \emph{kind} of fund, and the 25\% figure comes from a real rule rather
+than from where Apple happened to sit.
+
+\subsection{The daily schedule}
+
+The workflow now runs at 12:00 UTC every weekday (\code{0 12 * * 1-5}): install with the
+\code{real} extra, refresh prices (\code{make_real_data.py --prices-only}), write the Berkshire
+brief, post it to Slack, save it as an artifact. Manual runs can still choose the sample fund.
+Each run costs roughly \$0.10--0.15 of API credit, about \$3 a month. On a market holiday there
+is no new close, so the brief repeats the previous day's.
+
+\subsection{Decisions and why}
+
+\begin{enumerate}
+  \item \textbf{Same file format for real and sample data}, so no other code changed.
+  \item \textbf{Sample data stays the test data.} Tests and evals keep running on fixed,
+        planted data; real data only gets shape checks, because its numbers change daily.
+  \item \textbf{Berkshire Hathaway}: concentrated and famous, so the limit story is real.
+  \item \textbf{iShares IVV over SPY}: IVV publishes a CSV; SPY's file is Excel, which would
+        need another library.
+  \item \textbf{A reviewed, committed CUSIP list} rather than looking tickers up on every run:
+        visible, stable, and one manual fix lives in one place.
+  \item \textbf{\code{yfinance} as an optional extra}, since only the data builder needs it.
+  \item \textbf{Raw downloads git-ignored}; only the built dataset is committed.
+\end{enumerate}
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item 12 new tests (parsers on small inline samples; shape checks on \code{data/real/}),
+        each seen failing first.
+  \item The analytics run on the real data by hand, under both sets of limits.
+  \item A live brief on the real portfolio, checked against the tool output.
+  \item Full suite: 145 passed.
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item What is a 13F filing, and what three things does it leave out that our agent needs?
+  \item Why does the code need a CUSIP-to-ticker mapping, and why is it committed rather than
+        looked up each time?
+  \item Why did no code in the agent, tools or brief need to change for real data?
+  \item Why did the sample fund's limits produce 15 breaches for Berkshire, and why is that a
+        problem for a daily brief?
+  \item Why do tests keep using the sample data rather than the real data?
+  \item What does the \code{User-Agent} header tell the SEC, and why does it matter?
+\end{enumerate}
+\end{reviewq}
+
+\begin{takeaway}
+Real data arrived messy (codes instead of tickers, one stock spread over many rows, three
+spellings of one share class, no cash), and each problem was fixed in one small, tested
+function. Because real data was written in the same format as the sample data, the agent, the
+tools and the brief worked on it unchanged. The most important decision wasn't code: limits
+designed for an index-tracking fund turned a concentrated fund's brief into noise, and limits
+that fit the fund turned it back into news.
+\end{takeaway}
+
 % =====================================================================
 \appendix
 \section{Glossary}
 
 \begin{description}[style=sameline,leftmargin=3.2cm]
+  \item[13F filing] A US manager's quarterly public list of the US stocks it holds.
   \item[Active weight] Portfolio weight minus benchmark weight.
   \item[Agent] An LLM in a loop that can call tools until it reaches an answer.
   \item[Artifact] A file a GitHub workflow run saves for download.
@@ -2723,33 +2918,37 @@ the same made-up-cut-off habit seen in M4.
   \item[Benchmark] The index a fund is compared against.
   \item[Breach] A limit exceeded.
   \item[CI] Continuous integration: automatic tests on every push.
+  \item[Concentrated fund] A fund with a few large positions, not trying to track an index.
   \item[Context manager] An object used with \code{with} that runs setup and cleanup around a block.
   \item[cron] A five-field schedule, e.g. \code{0 12 * * 1-5} = 12:00 UTC on weekdays.
+  \item[CUSIP] A 9-character code identifying a North American security.
   \item[Dataclass] A Python class that just holds typed fields; \code{frozen} makes it immutable.
   \item[DataFrame] A pandas table with named columns.
   \item[Decorator] A function applied with \code{@name} that registers or wraps another function.
+  \item[EDGAR] The SEC's public database of company and fund filings.
   \item[Effort] How much the model reasons before answering (low to max); trades cost for depth.
+  \item[ETF] Exchange-traded fund; IVV holds the whole S\&P 500.
   \item[Eval] A scored test suite for AI behaviour.
   \item[Event recall] Share of planted events a brief mentions.
   \item[Fake (test double)] A scripted stand-in for something costly, used in tests.
   \item[False alarm] A brief claiming a breach or warning that isn't there.
   \item[Flag identity] A flag's (rule, subject) pair, used to compare flags before and after a trade.
   \item[Flaky case] An eval question that passes on some runs and fails on others.
-  \item[Gross exposure] Long minus short: the total size of all bets.
-  \item[GitHub Secrets] Encrypted per-repo storage for keys a workflow can use.
   \item[GICS] The standard scheme for classifying companies into sectors.
+  \item[GitHub Secrets] Encrypted per-repo storage for keys a workflow can use.
+  \item[Gross exposure] Long minus short: the total size of all bets.
   \item[Hallucinated number] A number in an answer that no tool result contains.
   \item[Harness] The program around the model: loop, logging, limits.
   \item[Hedge] A position taken to offset risk from another.
   \item[Immutable] Cannot be changed after creation; changes make a new copy.
   \item[Index alignment] pandas matching rows by label when combining tables.
+  \item[JSON Lines] A file with one JSON object per line; easy to append to.
   \item[JSON Schema] A standard JSON description of a tool's arguments and their types.
   \item[LLM] Large language model.
-  \item[.mcp.json] The committed file listing a project's MCP servers for Claude Code.
-  \item[JSON Lines] A file with one JSON object per line; easy to append to.
   \item[MCP] Model Context Protocol: a standard for exposing tools to AI.
-  \item[Morning brief] The agent's daily pre-market note on what changed and what needs attention.
+  \item[.mcp.json] The committed file listing a project's MCP servers for Claude Code.
   \item[Messages API] Anthropic's endpoint for conversations with Claude.
+  \item[Morning brief] The agent's daily pre-market note on what changed and what needs attention.
   \item[Mutation check] Breaking code or data on purpose to prove a test can fail.
   \item[NAV] Net asset value: market values plus cash.
   \item[Net exposure] Long plus short: the direction of the market bet.
@@ -2759,11 +2958,13 @@ the same made-up-cut-off habit seen in M4.
   \item[Pure function] Output depends only on inputs; no files, network, or side effects.
   \item[Refusal fallback] Retrying a declined request on another model, server-side.
   \item[Regex] A pattern for finding text, e.g. numbers in an answer.
+  \item[SEC] The US Securities and Exchange Commission, the market regulator.
   \item[Seed] The starting value for a random number generator.
   \item[Server instructions] Guidance an MCP server sends once, for every tool.
-  \item[SQLite] A database in a single file, built into Python.
-  \item[Slack webhook] A secret URL that posts whatever it receives into one Slack channel.
+  \item[Share class] One of several kinds of a company's stock, e.g. GOOGL vs GOOG.
   \item[Short] Selling borrowed shares; profits when the price falls.
+  \item[Slack webhook] A secret URL that posts whatever it receives into one Slack channel.
+  \item[SQLite] A database in a single file, built into Python.
   \item[Stable sort] A sort that keeps tied items in their original order.
   \item[Stop reason] Why the model stopped: \code{tool_use}, \code{end_turn}, ...
   \item[Structured output] A tool result as a JSON object with named fields.
@@ -2773,6 +2974,7 @@ the same made-up-cut-off habit seen in M4.
   \item[tool\_result / tool\_use] The content blocks that carry a tool's output and a tool request.
   \item[ToolError] The MCP exception whose message is shown to the model.
   \item[TypedDict] A type hint for a dict with known keys.
+  \item[User-Agent] A request header naming the program (and, for the SEC, a contact).
   \item[Warning] Close to a limit (90\% of it, or within 2 points for net).
   \item[Weight] Market value divided by NAV.
 \end{description}
@@ -2793,6 +2995,8 @@ python evals/run.py --limit 3       # eval a few cases (cents); no flags = all 3
 python -m pm_agent.brief [--slack]  # write today's brief (and post it to Slack)
 python evals/brief_eval.py          # grade the brief on 6 planted days (~$0.60)
 gh workflow run morning-brief.yml   # run the brief on GitHub
+python scripts/make_real_data.py    # rebuild data/real (needs pip install -e ".[real]")
+PM_AGENT_DATA_DIR=data/real python -m pm_agent.brief --portfolio berkshire_13f
 
 git status                          # what changed?
 git diff                            # show the changes

@@ -100,11 +100,11 @@ criteria pass and the change has been reviewed.
 
 ## M6 — Real data
 
-- [ ] **6.1 Real benchmark** — loader for an ETF holdings CSV (e.g. an S&P 500 ETF's published
+- [x] **6.1 Real benchmark** — loader for an ETF holdings CSV (e.g. an S&P 500 ETF's published
   holdings file, downloaded manually) → `benchmarks/<name>.csv` + sectors.
-- [ ] **6.2 Real portfolio from a 13F** — load an institution's 13F holdings from SEC EDGAR
+- [x] **6.2 Real portfolio from a 13F** — load an institution's 13F holdings from SEC EDGAR
   (send a User-Agent with contact info, respect rate limits) into portfolio JSON.
-- [ ] **6.3 Real prices** — daily closes via yfinance (unofficial; note that in README), cached.
+- [x] **6.3 Real prices** — daily closes via yfinance (unofficial; note that in README), cached.
 
 ## M7 — UI and demo
 
