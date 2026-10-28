@@ -203,6 +203,7 @@ def test_each_run_is_appended_to_the_runs_log(runs_log):
     assert first["tool_calls"][0]["name"] == "check_limits"
     assert first["tool_calls"][0]["args"] == {}
     assert first["tool_calls"][0]["error"] is None
+    assert '"value_pct": 15.2' in first["tool_calls"][0]["result"]  # what the model saw
     assert {"model", "stop_reason", "steps", "input_tokens", "output_tokens",
             "latency_s", "timestamp"} <= set(first)
     assert json.loads(lines[1])["question"] == "Hi"

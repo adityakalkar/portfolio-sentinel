@@ -61,6 +61,7 @@ class ToolCall:
     args: dict[str, Any]
     duration_s: float
     error: str | None = None
+    result: str = ""  # what the model saw; evals check the answer's numbers against it
 
 
 @dataclass
@@ -182,6 +183,7 @@ async def run_agent(
                     args=block.input,
                     duration_s=round(time.perf_counter() - tool_started, 3),
                     error=text if result.is_error else None,
+                    result=text,
                 ))
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": text, "is_error": bool(result.is_error)})

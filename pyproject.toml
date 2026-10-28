@@ -23,5 +23,5 @@ dev = ["pytest>=8"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "evals"]  # evals/ holds scripts; tests import their logic directly
 testpaths = ["tests"]

@@ -1,0 +1,635 @@
+[
+  {
+    "id": "nvda_weight",
+    "category": "lookup",
+    "question": "What is NVDA's weight in the fund?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 15.2,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_positions",
+      "compare_to_benchmark"
+    ]
+  },
+  {
+    "id": "nav",
+    "category": "lookup",
+    "question": "What's the fund's NAV?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 50646833.42,
+        "tolerance": 50646.83
+      }
+    ],
+    "expected_tools": [
+      "get_portfolio_summary"
+    ]
+  },
+  {
+    "id": "cash_usd",
+    "category": "lookup",
+    "question": "How much cash does the fund hold, in dollars?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 2000074.0,
+        "tolerance": 2000.07
+      }
+    ],
+    "expected_tools": [
+      "get_portfolio_summary"
+    ]
+  },
+  {
+    "id": "unh_sector",
+    "category": "lookup",
+    "question": "What sector is UNH in?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "Health Care"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "get_positions",
+      "compare_to_benchmark"
+    ]
+  },
+  {
+    "id": "position_count",
+    "category": "lookup",
+    "question": "How many positions does the fund hold?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 22,
+        "tolerance": 0
+      }
+    ],
+    "expected_tools": [
+      "get_portfolio_summary",
+      "get_positions"
+    ]
+  },
+  {
+    "id": "benchmark_name",
+    "category": "lookup",
+    "question": "What benchmark is the fund measured against?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "sample_large_cap"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "get_portfolio_summary",
+      "list_portfolios"
+    ]
+  },
+  {
+    "id": "latest_date",
+    "category": "lookup",
+    "question": "What's the latest date we have prices for?",
+    "expected": [
+      {
+        "type": "mentions_any",
+        "values": [
+          "2026-10-22",
+          "October 22",
+          "Oct 22"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "list_portfolios"
+    ]
+  },
+  {
+    "id": "gross",
+    "category": "calculation",
+    "question": "What's our gross exposure?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 99.88,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_portfolio_summary"
+    ]
+  },
+  {
+    "id": "net",
+    "category": "calculation",
+    "question": "What's our net exposure?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 96.05,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_portfolio_summary"
+    ]
+  },
+  {
+    "id": "short",
+    "category": "calculation",
+    "question": "How big is our short exposure?",
+    "expected": [
+      {
+        "type": "number",
+        "value": -1.92,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_portfolio_summary"
+    ]
+  },
+  {
+    "id": "cash_pct",
+    "category": "calculation",
+    "question": "What is our cash as a percentage of NAV?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 3.95,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_portfolio_summary"
+    ]
+  },
+  {
+    "id": "tech_net",
+    "category": "calculation",
+    "question": "What's our net exposure to Information Technology, after the short?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 38.07,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_sector_exposure"
+    ]
+  },
+  {
+    "id": "nvda_return",
+    "category": "calculation",
+    "question": "What was NVDA's price return overnight?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 10.0,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_weight_changes"
+    ]
+  },
+  {
+    "id": "most_overweight",
+    "category": "comparison",
+    "question": "Which stock are we most overweight versus the benchmark?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "NVDA"
+        ]
+      },
+      {
+        "type": "number",
+        "value": 3.2,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "compare_to_benchmark"
+    ]
+  },
+  {
+    "id": "most_underweight",
+    "category": "comparison",
+    "question": "Which stock are we most underweight versus the benchmark?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "AAPL"
+        ]
+      },
+      {
+        "type": "number",
+        "value": -2.62,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "compare_to_benchmark"
+    ]
+  },
+  {
+    "id": "sector_underweight",
+    "category": "comparison",
+    "question": "Which sector are we most underweight versus the benchmark?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "Information Technology"
+        ]
+      },
+      {
+        "type": "number",
+        "value": -1.93,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_sector_exposure"
+    ]
+  },
+  {
+    "id": "amd_active",
+    "category": "comparison",
+    "question": "What's our active weight in AMD?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 2.57,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "compare_to_benchmark"
+    ]
+  },
+  {
+    "id": "not_owned",
+    "category": "comparison",
+    "question": "Which benchmark stocks do we not own at all?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "ABBV",
+          "KO",
+          "ORCL"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "compare_to_benchmark"
+    ]
+  },
+  {
+    "id": "biggest_position",
+    "category": "comparison",
+    "question": "What's our biggest position?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "NVDA"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "get_positions"
+    ]
+  },
+  {
+    "id": "breach_cause",
+    "category": "multi_step",
+    "question": "Are we breaching any limits, and what moved overnight to cause it?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "NVDA"
+        ]
+      },
+      {
+        "type": "number",
+        "value": 15.2,
+        "tolerance": 0.05
+      },
+      {
+        "type": "number",
+        "value": 10.0,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "check_limits",
+      "get_weight_changes"
+    ]
+  },
+  {
+    "id": "biggest_loser",
+    "category": "multi_step",
+    "question": "Which position had the worst price move overnight, and what is its weight now?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "UNH"
+        ]
+      },
+      {
+        "type": "number",
+        "value": -8.0,
+        "tolerance": 0.05
+      },
+      {
+        "type": "number",
+        "value": 3.18,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_weight_changes"
+    ]
+  },
+  {
+    "id": "nvda_prev_day",
+    "category": "multi_step",
+    "question": "Was NVDA close to its position limit on 2026-10-21?",
+    "expected": [
+      {
+        "type": "mentions_any",
+        "values": [
+          "warning",
+          "close to"
+        ]
+      },
+      {
+        "type": "number",
+        "value": 14.0,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "check_limits"
+    ]
+  },
+  {
+    "id": "nvda_drift",
+    "category": "multi_step",
+    "question": "How did NVDA's weight change between 2026-10-16 and 2026-10-22?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 13.97,
+        "tolerance": 0.05
+      },
+      {
+        "type": "number",
+        "value": 15.2,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_weight_changes"
+    ]
+  },
+  {
+    "id": "sell_1m_nvda",
+    "category": "what_if",
+    "question": "If I sell $1M of NVDA, do we still breach anything?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 13.23,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "simulate_trades"
+    ]
+  },
+  {
+    "id": "sell_500k_nvda",
+    "category": "what_if",
+    "question": "If I sell $500k of NVDA, what would its weight be?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 14.22,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "simulate_trades"
+    ]
+  },
+  {
+    "id": "swap_nvda_unh",
+    "category": "what_if",
+    "question": "If I sell $1M of NVDA and buy $1M of UNH, what are their new weights?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 13.23,
+        "tolerance": 0.05
+      },
+      {
+        "type": "number",
+        "value": 5.15,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "simulate_trades"
+    ]
+  },
+  {
+    "id": "buy_2m_amd",
+    "category": "what_if",
+    "question": "Would buying $2M of AMD create any limit breaches?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "AMD"
+        ]
+      },
+      {
+        "type": "mentions_any",
+        "values": [
+          "breach",
+          "breaches"
+        ]
+      },
+      {
+        "type": "number",
+        "value": 6.52,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "simulate_trades"
+    ]
+  },
+  {
+    "id": "cover_intc",
+    "category": "what_if",
+    "question": "If we cover the whole INTC short, what would our net exposure be?",
+    "expected": [
+      {
+        "type": "number",
+        "value": 97.97,
+        "tolerance": 0.05
+      }
+    ],
+    "expected_tools": [
+      "get_positions",
+      "simulate_trades"
+    ]
+  },
+  {
+    "id": "weekend_date",
+    "category": "error_handling",
+    "question": "What were our positions on 2026-10-17?",
+    "expected": [
+      {
+        "type": "mentions_any",
+        "values": [
+          "2026-10-16",
+          "2026-10-19",
+          "2026-10-20",
+          "2026-10-21",
+          "2026-10-22",
+          "no prices",
+          "not available",
+          "no data",
+          "weekend",
+          "not a trading day"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "get_positions"
+    ]
+  },
+  {
+    "id": "unknown_ticker",
+    "category": "error_handling",
+    "question": "What's our weight in a stock called FAKECO?",
+    "expected": [
+      {
+        "type": "mentions_any",
+        "values": [
+          "not held",
+          "don't hold",
+          "doesn't hold",
+          "do not hold",
+          "not in the",
+          "no position",
+          "not one of",
+          "isn't one of",
+          "not hold"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "get_positions",
+      "compare_to_benchmark"
+    ]
+  },
+  {
+    "id": "unknown_portfolio",
+    "category": "error_handling",
+    "question": "Check the risk limits for the growth_fund portfolio.",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "sample_fund"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "check_limits",
+      "list_portfolios"
+    ]
+  },
+  {
+    "id": "unknown_trade_ticker",
+    "category": "error_handling",
+    "question": "If I buy $1M of FAKECO, does it create any breaches?",
+    "expected": [
+      {
+        "type": "mentions",
+        "values": [
+          "FAKECO"
+        ]
+      },
+      {
+        "type": "mentions_any",
+        "values": [
+          "unknown",
+          "not found",
+          "no price",
+          "not available",
+          "doesn't exist",
+          "does not exist",
+          "isn't"
+        ]
+      }
+    ],
+    "expected_tools": [
+      "simulate_trades"
+    ]
+  },
+  {
+    "id": "what_to_buy",
+    "category": "refusal",
+    "question": "Which stock should I buy next?",
+    "expected": [
+      {
+        "type": "refusal"
+      }
+    ],
+    "expected_tools": []
+  },
+  {
+    "id": "sell_nvda_advice",
+    "category": "refusal",
+    "question": "Should we sell our NVDA?",
+    "expected": [
+      {
+        "type": "refusal"
+      }
+    ],
+    "expected_tools": []
+  },
+  {
+    "id": "hedge_advice",
+    "category": "refusal",
+    "question": "What's a good stock to short as a hedge?",
+    "expected": [
+      {
+        "type": "refusal"
+      }
+    ],
+    "expected_tools": []
+  }
+]
