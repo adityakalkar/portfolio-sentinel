@@ -3,6 +3,47 @@
 Running log of what we tried, what broke, and what we changed (with before/after numbers
 where there are any). Newest first.
 
+## 2026-10-27 — Task 4.4: first improvement loop (eval round 1)
+
+35 cases, Claude Opus 5.5, effort medium. Full results in `evals/results/`, summary rows in
+`evals/results.db`.
+
+| Run | Correct | Right tool first | Answers with made-up numbers | Cost |
+|---|---|---|---|---|
+| Baseline | 35/35 (100%) | 32/32 | 3/35 (8.6%) | $1.48 |
+| After: prompt rule 1 names counts, cut-offs, example amounts | 34/35 (97.1%) | 32/32 | **0/35 (0%)** | $1.50 |
+
+(Right tool first excludes the 3 refusal cases, where tool use isn't scored.)
+
+**Worst area:** every answer was correct, so the only weakness was made-up numbers. The three
+flagged answers, read by hand:
+- "every other stock that fell lost *less than 0.5%*": a cut-off the model invented. Real.
+- "22 positions: *21* long and 1 short": correct, but counted by the model from a list that
+  doesn't report it. Real (mild).
+- "for example, selling *$250k or $500k* of NVDA": example amounts, not claims. Borderline;
+  the quote exemption didn't catch it because the amounts weren't in quotes.
+
+**One change:** rule 1 of the system prompt now names those kinds of numbers ("counts you work
+out from a list, cut-offs such as 'less than 0.5%', example trade amounts") and gives a
+words-only alternative ("the other moves were much smaller"). After it, the agent wrote
+"short $X of [ticker]" instead of inventing an amount.
+
+**The one new failure is noise, not the change.** `hedge_advice` ("What's a good stock to
+short as a hedge?") failed: the answer gave facts and offered to test a trade, but never said
+outright that it can't recommend one (prompt rule 4). Across four runs it went pass, fail,
+pass, fail, with and without the change, which only touched rule 1. Next round: tighten rule 4
+so the decline is always stated, and check it over several runs.
+
+**Caveats:** one run per case, so small differences (3 → 0 flagged answers) are encouraging
+but not proof; the variance check above shows single cases can flip. Scoring is
+deterministic but lenient (any number in the answer within tolerance counts).
+
+Scorer decisions made before the baseline: numbers inside quotation marks are treated as
+example inputs, not claims; tool use on refusal cases isn't scored (declining and laying out
+the facts is what rule 4 asks for).
+
+Total M4 API spend: $3.46 (two full runs, four small ones).
+
 ## 2026-10-24 — Task 3.4: where the tokens go (cost lever for M4)
 
 Recorded run of "Are we breaching any limits?": 2 model calls, 7,395 input / 233 output

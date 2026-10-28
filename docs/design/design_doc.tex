@@ -54,7 +54,7 @@
 
 \title{\textbf{Portfolio Sentinel}\\[0.3em]\large Design Document: concepts, architecture, and decisions}
 \author{Aditya Kalkar}
-\date{Last updated: 2026-10-24 (through milestone M3)}
+\date{Last updated: 2026-10-27 (through milestone M4)}
 
 \begin{document}
 \maketitle
@@ -151,7 +151,7 @@ Read it bottom-up:
   \item[Agent (built in M3)] A loop we write by hand: send the question and tool list to Claude;
         if Claude asks for a tool, run it through MCP and send back the result; repeat until
         Claude gives a final answer.
-  \item[Evals (M4) and morning brief (M5)] Built on top of the agent.
+  \item[Evals (built in M4) and morning brief (M5)] Built on top of the agent.
 \end{description}
 
 \begin{whyitmatters}[Why layers?]
@@ -175,8 +175,8 @@ M1b & Analytics core, written test-first; sample data sanity tests & Done \\
 M2a & MCP server with 8 tools (task 2.1), tested in-process and over stdio & Done \\
 M2b & Connected to Claude Code; tool description pass (tasks 2.2, 2.3) & Done \\
 M3  & Hand-written agent loop, system prompt, run logging & Done \\
-M4  & Eval harness: test cases, scoring, results history & Next \\
-M5  & Morning brief, scenario evals, scheduling, delivery & \\
+M4  & Eval harness: test cases, scoring, results history & Done \\
+M5  & Morning brief, scenario evals, scheduling, delivery & Next \\
 M6  & Real data (ETF holdings, SEC 13F filings, prices) & \\
 M7  & Streamlit UI, metrics dashboard, deploy, demo & \\
 M8  & Stretch goals (model comparison, prompt-injection tests, ...) & \\
@@ -577,6 +577,34 @@ deterministic, so we measure rates: accuracy, how often the agent picks the righ
 how often it invents numbers, cost, and latency. Evals turn ``it seems better'' into ``accuracy
 went from 72\% to 88\%.''
 
+\textbf{Evals versus unit tests (added in M4).} In one line: \emph{pytest checks the math; the
+eval checks the agent's judgment.} The unit tests prove that \code{analytics.py} computes
+15.2\% correctly. The eval asks whether the agent, given a plain-English question, calls the
+right tool, reports what came back without changing it, handles mistakes, and declines to give
+advice. A wrong eval answer can come from the model, the system prompt, the tool descriptions,
+or the loop, so the eval tests all four together.
+
+\textbf{The answer key.} Each eval question has a list of \emph{checks} that must all pass,
+for example ``some number in the answer is within 0.05 of 15.2'' or ``the answer mentions
+NVDA''. The expected values are computed by calling the analytics code, never typed in, so
+the key cannot drift from the data.
+
+\textbf{Deterministic scoring versus an AI judge.} Many eval setups ask a second model to
+grade answers. That handles free-form answers well, but costs money, can itself be wrong, and
+gives slightly different grades each time. Our questions have checkable facts, so simple
+code checks are enough: free, instant, and the same every time. The trade-off is leniency:
+``any number close to 15.2'' could occasionally pass by luck.
+
+\textbf{Run-to-run variance.} The same question can get a slightly different answer each
+time; the model is not a calculator. So one run is a sample, not a verdict. A single case that
+flips between pass and fail is \emph{flaky}, and rerunning it a few times shows whether a
+change helped or the difference was luck. Bigger, repeated runs give more trustworthy numbers.
+
+\textbf{Baseline and one change at a time.} First run everything unchanged: the
+\emph{baseline}. Then change exactly one thing (a prompt rule, a tool description, a tool's
+output) and run again. If you change two things and the score moves, you can't tell which one
+did it. This is the same idea as a controlled experiment in science.
+
 \subsection{Claude Pro versus the Anthropic API}
 
 These are separate products. Claude Pro is a subscription for using Claude yourself (claude.ai
@@ -752,6 +780,23 @@ decision guarantees.
         work run. \code{asyncio.run(main())} starts an event loop, runs \code{main} to the
         end, and returns its result. Our tests wrap each client call in \code{asyncio.run},
         so the test functions themselves stay ordinary (no async test plugin needed).
+\end{description}
+
+\subsection{Regular expressions and SQLite (added in M4)}
+
+\begin{description}[style=nextline]
+  \item[Regular expression (regex)] A small pattern language for finding text. The scorer uses
+        one to find numbers in an answer: digits, optional commas and decimals, an optional
+        dollar sign in front and an optional \code{M} or \code{k} after, so ``\$50.6M'' is read as
+        50{,}600{,}000. Another pattern finds dates (\texttt{\textbackslash d\{4\}-\textbackslash d\{2\}-\textbackslash d\{2\}}: four digits,
+        dash, two digits, dash, two digits) so they can be ignored. Regexes are compact but
+        easy to get subtly wrong, which is why the scorer has its own unit tests.
+  \item[SQLite] A complete database stored in a single file (\code{evals/results.db}), built
+        into Python (\code{import sqlite3}), so there is no server to run and no dependency to
+        add. Data lives in \emph{tables} (rows and named columns) and is read and written with
+        \textbf{SQL} statements such as \code{INSERT INTO eval_runs (...) VALUES (...)} and
+        \code{SELECT * FROM eval_runs}. We keep one row per eval run, so scores can be
+        compared and, in M7, charted over time.
 \end{description}
 
 \subsection{Fakes, environment variables, and JSON Lines (added in M3)}
@@ -2200,6 +2245,222 @@ own. A system prompt with a concrete example and an honest escape hatch fixed it
 fake-model tests mean the loop itself is checked on every push without spending anything.
 \end{takeaway}
 
+% ---------------------------------------------------------------------
+\section{M4: the eval harness}
+
+\subsection{Goal}
+
+Tasks 4.1 to 4.4: a repeatable, scored exam for the agent. One command runs it on a fixed set
+of questions with a computed answer key, scores each answer, records cost and speed, and keeps
+a history so changes can be judged by numbers instead of impressions. Then use it once for
+real: find the weakest area, change one thing, measure again.
+
+\subsection{What was built}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{File} & \textbf{What it does} \\
+\midrule
+\code{evals/build_cases.py} & builds the 35 questions and computes their answers (4.1) \\
+\code{evals/cases.json}     & the generated question list (committed) \\
+\code{evals/scoring.py}     & pure scoring functions: checks, made-up numbers, cost (4.2) \\
+\code{evals/run.py}         & runs the agent on the cases, prints a table, saves results (4.2) \\
+\code{evals/history.py}     & one summary row per run in \code{evals/results.db} (4.3) \\
+\code{tests/test_eval_cases.py}, \code{test_scoring.py}, \code{test_history.py} & 19 tests, no API calls \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The agent's run log now also stores each tool's result text, which the made-up-number check
+needs.
+
+\subsection{The question list (4.1)}
+
+35 questions in seven categories:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l r X@{}}
+\toprule
+\textbf{Category} & \textbf{Cases} & \textbf{Example} \\
+\midrule
+lookup         & 7 & What is NVDA's weight in the fund? \\
+calculation    & 6 & What's our gross exposure? \\
+comparison     & 6 & Which stock are we most overweight versus the benchmark? \\
+multi\_step    & 4 & Are we breaching any limits, and what moved overnight to cause it? \\
+what\_if       & 5 & Would buying \$2M of AMD create any limit breaches? \\
+error\_handling & 4 & What were our positions on 2026-10-17? (a Saturday) \\
+refusal        & 3 & Which stock should I buy next? \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Each case is a small JSON object:
+
+\begin{lstlisting}[style=plain]
+{"id": "sell_1m_nvda", "category": "what_if",
+ "question": "If I sell $1M of NVDA, do we still breach anything?",
+ "expected": [{"type": "number", "value": 13.23, "tolerance": 0.05}],
+ "expected_tools": ["simulate_trades"]}
+\end{lstlisting}
+
+The 13.23 is not typed: \code{build_cases.py} computes it by calling \code{apply_trades} and
+\code{position_weights}, exactly as the tools do (CLAUDE.md rule 5). A test fails if the
+committed \code{cases.json} ever differs from a fresh build, so the answer key can't drift.
+
+Two cases worth noticing. \code{buy_2m_amd} checks that the agent reports a \emph{new} breach a
+trade creates (AMD's active weight would become 6.52\%, over the 5\% limit), not just breaches
+it clears. \code{cover_intc} needs two steps: read the INTC short's value, then simulate buying
+exactly that much back.
+
+\subsection{Scoring (4.2)}
+
+Each check type is a few lines of code:
+
+\begin{description}[style=nextline]
+  \item[\code{number}] Some number in the answer is within the tolerance of the expected
+        value. The sign is ignored, because ``short exposure of 1.92\%'' and ``$-1.92$\%'' are
+        both right. The 0.05 tolerance accepts ``13.2\%'' for 13.23\% but not ``13\%''.
+  \item[\code{mentions} / \code{mentions_any}] Whole-word, any-case text matches, so ``KO''
+        doesn't match inside ``KOALA''.
+  \item[\code{refusal}] The answer contains a declining phrase such as ``can't recommend'' or
+        ``investment advice''.
+\end{description}
+
+\textbf{The made-up-number check} is the most important metric for this project, because
+the one rule is ``the agent never does math''. It reads every number in the answer and asks:
+does this appear, after rounding, in a tool result or tool argument from this run? A number
+that doesn't is counted as made up.
+
+\begin{lstlisting}[style=py]
+def _rounds_to(number, source):
+    """Could `number` be `source` rounded the way it is written? 50.6M vs 50,646,833.42: yes."""
+    return abs(round(abs(source) / number.scale, number.decimals) - number.written) < 1e-9
+\end{lstlisting}
+
+``\$50.6M'' is written with one decimal and a scale of a million, so it matches the tool's
+\$50{,}646{,}833.42 rounded to \$50.6 million. Exempt, as the spec says: numbers in the question
+(``\$1M''), dates, and small whole numbers under 10 (``1 breach''). Two exemptions were added
+before the baseline, both because the answers they flagged were not claims about the fund:
+
+\begin{itemize}
+  \item \textbf{Numbers inside quotation marks} are example inputs (``for example, `buy \$500k
+        of UNH'\,''), not facts.
+  \item \textbf{Tool use on refusal questions is not scored.} Declining and then laying out
+        the facts (``NVDA is 15.2\%, over its limit'') is what prompt rule 4 asks for, so those
+        tool calls are neither ``right'' nor ``wasted''.
+\end{itemize}
+
+Also measured per case: whether the first tool called was one of the expected ones, wasted
+calls (an unneeded tool, or an exact repeat), latency, tokens and cost. \code{run.py} prints a
+table per category and overall, and has \code{--limit}, \code{--category} and \code{--case}
+so most runs cost cents.
+
+\subsection{Results history (4.3)}
+
+Every run writes its full per-case results (answers, tool calls, checks) to
+\code{evals/results/<timestamp>.json}, and one summary row (label, model, effort, git commit,
+which cases, accuracy, made-up rate, cost, \ldots) to the \code{eval_runs} table in
+\code{evals/results.db}. Both are git-ignored outputs. The git commit is recorded (with
+``-dirty'' if there were uncommitted changes) so any score can be traced to the exact code that
+produced it.
+
+\subsection{The first improvement loop (4.4)}
+
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Run} & \textbf{Correct} & \textbf{Right tool first} & \textbf{Made-up numbers} & \textbf{Cost} \\
+\midrule
+Baseline                 & 35/35 & 32/32 & 3/35 (8.6\%) & \$1.48 \\
+After the rule 1 change  & 34/35 & 32/32 & 0/35 (0\%)   & \$1.50 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Finding the weakest area.} Every baseline answer was correct, so accuracy had nothing
+to fix. The weak spot was made-up numbers, in 3 answers. Read by hand:
+
+\begin{itemize}
+  \item ``every other stock that fell lost \emph{less than 0.5\%}'': a cut-off the model
+        invented.
+  \item ``22 positions: \emph{21} long and 1 short'': correct, but counted by the model from a
+        list that doesn't report it.
+  \item ``for example, selling \emph{\$250k or \$500k} of NVDA'': example amounts, not in
+        quotes.
+\end{itemize}
+
+All three are the model producing small numbers of its own, so one change targeted them:
+rule 1 of the system prompt now names ``counts you work out from a list, cut-offs such as `less
+than 0.5\%', example trade amounts'' and gives a words-only alternative. Afterwards the agent
+wrote ``short \$X of [ticker]'' instead of inventing an amount, and no answer had a made-up
+number.
+
+\textbf{Reading the one new failure honestly.} \code{hedge_advice} (``What's a good stock to
+short as a hedge?'') failed after the change. Its answer didn't give advice, but it never said
+outright that it can't recommend one, which rule 4 asks for. Was the change to blame? It only
+touched rule 1, so the question was rerun: across four runs it went pass, fail, pass, fail. It
+is a flaky case, independent of the change. Next round: tighten rule 4's wording and judge it
+over several runs.
+
+\textbf{What the result does and doesn't show.} Each case ran once per configuration. Going
+from 3 flagged answers to 0 out of 35 is consistent with the change working, but single runs
+vary, as the hedge question shows. A firmer claim would need repeated runs. This is noted in
+\code{docs/NOTES.md}, alongside the cost: \$3.46 for all of M4.
+
+\subsection{Decisions and why}
+
+\begin{enumerate}
+  \item \textbf{Code checks, not an AI judge.} The questions have checkable facts, so scoring is
+        free, instant, and identical every time. The price is some leniency.
+  \item \textbf{A list of checks per case}, all of which must pass, rather than one expected
+        value. ``Most overweight'' needs both the ticker (NVDA) and the number (3.2).
+  \item \textbf{Expected tools are a set of acceptable choices.} NVDA's weight is in both
+        \code{get_positions} and \code{compare_to_benchmark}; either is a right first call.
+  \item \textbf{A retry after an error is not ``wasted''.} Reading an error and fixing the call
+        is rule 3; only exact repeats and unneeded tools count.
+  \item \textbf{Exemptions added only for things that aren't claims} (quoted examples,
+        refusal tool use), each with its own test, and decided before the baseline so the
+        before/after comparison uses the same scorer.
+  \item \textbf{One change, full rerun.} Rerunning only the flagged cases would have been
+        cheaper but could hide side effects elsewhere.
+\end{enumerate}
+
+\subsection{How it was verified}
+
+\begin{enumerate}
+  \item 19 new unit tests (case list shape and sync, every check type, the made-up-number
+        check and its exemptions, case scoring, summaries, the history table), all using fake
+        run logs: no API calls. Each was seen failing before its code existed.
+  \item A 3-case smoke run, then the refusal category alone, to check the scorer on real
+        answers before spending on a full run. That is how the two exemptions were found.
+  \item Every flagged answer and the one failure were read by hand, not just counted.
+  \item Full suite: 107 passed.
+\end{enumerate}
+
+\begin{reviewq}
+\begin{enumerate}
+  \item In one sentence each: what do the unit tests check, and what does the eval check?
+  \item Why are the expected answers computed from \code{analytics.py} instead of typed in?
+  \item How does the scorer decide that ``\$50.6M'' is not a made-up number?
+  \item Why is a retry after a tool error not counted as a wasted call?
+  \item Why were the two scorer exemptions decided \emph{before} the baseline run?
+  \item The hedge question failed after the change. How was it shown that the change didn't
+        cause it?
+  \item Why change only one thing between runs?
+  \item What would make the 3 $\to$ 0 result more convincing?
+\end{enumerate}
+\end{reviewq}
+
+\begin{takeaway}
+The eval turns ``the agent seems fine'' into numbers: 35 questions, an answer key computed from
+the same tested code, and a score per answer for correctness, tool choice, made-up numbers and
+cost. The first round found the agent already answering everything correctly, with its one real
+habit being small numbers of its own. One prompt change removed them. Just as important, the
+round showed how to read results honestly: check flagged answers by hand, and when a case flips,
+rerun it before blaming the change.
+\end{takeaway}
+
 % =====================================================================
 \appendix
 \section{Glossary}
@@ -2207,6 +2468,7 @@ fake-model tests mean the loop itself is checked on every push without spending 
 \begin{description}[style=sameline,leftmargin=3.2cm]
   \item[Active weight] Portfolio weight minus benchmark weight.
   \item[Agent] An LLM in a loop that can call tools until it reaches an answer.
+  \item[Baseline] The first eval run, unchanged; later runs are compared to it.
   \item[Benchmark] The index a fund is compared against.
   \item[Breach] A limit exceeded.
   \item[CI] Continuous integration: automatic tests on every push.
@@ -2218,8 +2480,10 @@ fake-model tests mean the loop itself is checked on every push without spending 
   \item[Eval] A scored test suite for AI behaviour.
   \item[Fake (test double)] A scripted stand-in for something costly, used in tests.
   \item[Flag identity] A flag's (rule, subject) pair, used to compare flags before and after a trade.
+  \item[Flaky case] An eval question that passes on some runs and fails on others.
   \item[Gross exposure] Long minus short: the total size of all bets.
   \item[GICS] The standard scheme for classifying companies into sectors.
+  \item[Hallucinated number] A number in an answer that no tool result contains.
   \item[Harness] The program around the model: loop, logging, limits.
   \item[Hedge] A position taken to offset risk from another.
   \item[Immutable] Cannot be changed after creation; changes make a new copy.
@@ -2237,8 +2501,10 @@ fake-model tests mean the loop itself is checked on every push without spending 
   \item[Pre-trade check] Simulating a trade and checking limits before placing it.
   \item[Pure function] Output depends only on inputs; no files, network, or side effects.
   \item[Refusal fallback] Retrying a declined request on another model, server-side.
+  \item[Regex] A pattern for finding text, e.g. numbers in an answer.
   \item[Seed] The starting value for a random number generator.
   \item[Server instructions] Guidance an MCP server sends once, for every tool.
+  \item[SQLite] A database in a single file, built into Python.
   \item[Short] Selling borrowed shares; profits when the price falls.
   \item[Stable sort] A sort that keeps tied items in their original order.
   \item[Stop reason] Why the model stopped: \code{tool_use}, \code{end_turn}, ...
@@ -2264,6 +2530,8 @@ pytest tests/test_data.py -v        # run one file, verbose
 python scripts/make_sample_data.py  # regenerate data/sample
 python -m pm_agent.mcp_server       # run the MCP server over stdio
 python -m pm_agent.agent "..."      # ask the agent a question (uses the API)
+python evals/build_cases.py         # regenerate evals/cases.json
+python evals/run.py --limit 3       # eval a few cases (cents); no flags = all 35
 
 git status                          # what changed?
 git diff                            # show the changes

@@ -75,15 +75,15 @@ criteria pass and the change has been reviewed.
 
 ## M4 — Eval harness
 
-- [ ] **4.1 Case builder** — `evals/build_cases.py` → `evals/cases.json` with ~30 cases to start
+- [x] **4.1 Case builder** — `evals/build_cases.py` → `evals/cases.json` with ~30 cases to start
   (grow to 50–100), all categories from SPEC §10. Expected values computed from analytics.
-- [ ] **4.2 Runner and scoring** — `evals/run.py`: run the agent per case, score numbers within
+- [x] **4.2 Runner and scoring** — `evals/run.py`: run the agent per case, score numbers within
   tolerance, ticker/flag answers, refusals, tool usage, hallucinated numbers, latency, tokens,
   cost. `--limit N` and `--category X` flags for cheap iteration.
   - **Done when:** a run prints a summary table and saves results; scoring logic has unit tests
     using fake agent outputs.
-- [ ] **4.3 Results history** — append a summary row per run to `evals/results.db` (SQLite).
-- [ ] **4.4 First improvement loop** — run, find the worst category, change one thing (tool
+- [x] **4.3 Results history** — append a summary row per run to `evals/results.db` (SQLite).
+- [x] **4.4 First improvement loop** — run, find the worst category, change one thing (tool
   description, prompt, tool output shape), rerun. Log before/after in `docs/NOTES.md`.
 
 ## M5 — Morning brief
