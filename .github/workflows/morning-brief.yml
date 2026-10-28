@@ -1,25 +1,30 @@
 name: Morning brief
 
-# Manual trigger only until real data arrives (M6, SPEC §9): on the sample data the latest date
-# never changes, so a daily run would write the same brief and spend API credit every day.
-# After M6, add the schedule below: 12:00 UTC on weekdays = 7am EST / 8am EDT, before the US
-# market opens either way (GitHub cron is always UTC and ignores daylight saving).
+# Runs every weekday before the US market opens on the real data (M6): refresh prices,
+# write the brief for the Berkshire 13F portfolio, post it to Slack, save it as an artifact.
+# 12:00 UTC = 7am EST / 8am EDT, before the 9:30am open either way (GitHub cron is always
+# UTC and ignores daylight saving). Costs roughly $0.10-0.15 of API credit per run.
+# To pause it: Actions tab -> Morning brief -> "..." -> Disable workflow.
 on:
+  schedule:
+    - cron: "0 12 * * 1-5"
   workflow_dispatch:
     inputs:
-      portfolio:
-        description: "Portfolio name"
-        default: "sample_fund"
-        required: true
+      fund:
+        description: "Which fund"
+        type: choice
+        options: [berkshire_13f, sample_fund]
+        default: berkshire_13f
       date:
         description: "Brief date, YYYY-MM-DD (leave empty for the latest price date)"
         required: false
-  # schedule:
-  #   - cron: "0 12 * * 1-5"
 
 jobs:
   brief:
     runs-on: ubuntu-latest
+    env:
+      # Scheduled runs have no inputs, so fall back to the real fund.
+      FUND: ${{ inputs.fund || 'berkshire_13f' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +34,11 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -e .
+        run: pip install -e ".[real]"
+
+      - name: Refresh prices (real data only)
+        if: env.FUND == 'berkshire_13f'
+        run: python scripts/make_real_data.py --prices-only
 
       - name: Write the brief
         env:
@@ -37,14 +46,18 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}  # optional: post to Slack if set
           # Inputs go through env, not straight into the script, so a crafted input
           # can't inject shell commands.
-          PORTFOLIO: ${{ inputs.portfolio }}
           BRIEF_DATE: ${{ inputs.date }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::error::Add an ANTHROPIC_API_KEY secret: repo Settings > Secrets and variables > Actions"
             exit 1
           fi
-          args=(--portfolio "$PORTFOLIO")
+          if [ "$FUND" = "sample_fund" ]; then
+            export PM_AGENT_DATA_DIR=data/sample
+          else
+            export PM_AGENT_DATA_DIR=data/real
+          fi
+          args=(--portfolio "$FUND")
           if [ -n "$BRIEF_DATE" ]; then args+=(--date "$BRIEF_DATE"); fi
           if [ -n "$SLACK_WEBHOOK_URL" ]; then args+=(--slack); fi
           python -m pm_agent.brief "${args[@]}"
@@ -52,5 +65,5 @@ jobs:
       - name: Save the brief as a downloadable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: morning-brief-${{ inputs.portfolio }}-${{ github.run_number }}
+          name: morning-brief-${{ env.FUND }}-${{ github.run_number }}
           path: briefs/

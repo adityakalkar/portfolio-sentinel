@@ -13,6 +13,8 @@ venv/
 
 # Generated outputs
 logs/
+# raw downloads (ETF holdings, SEC filings, price cache): rebuilt, not shared
+data/raw/
 evals/results/
 evals/results.db
 

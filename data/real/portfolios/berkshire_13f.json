@@ -1,0 +1,133 @@
+{
+  "display_name": "Berkshire Hathaway 13F (holdings as of 2026-06-30)",
+  "benchmark": "sp500_ivv",
+  "cash": 6412660950.51,
+  "limits": {
+    "max_position": 0.25,
+    "max_stock_active": 0.2,
+    "max_sector_active": 0.25,
+    "max_gross": 1.15,
+    "min_net": 0.9,
+    "max_net": 1.02,
+    "warn_at": 0.9,
+    "net_warn_buffer": 0.02
+  },
+  "positions": [
+    {
+      "ticker": "AAPL",
+      "shares": 227917808
+    },
+    {
+      "ticker": "AXP",
+      "shares": 151610700
+    },
+    {
+      "ticker": "KO",
+      "shares": 400000000
+    },
+    {
+      "ticker": "GOOGL",
+      "shares": 78791167
+    },
+    {
+      "ticker": "BAC",
+      "shares": 483394015
+    },
+    {
+      "ticker": "CVX",
+      "shares": 84375856
+    },
+    {
+      "ticker": "OXY",
+      "shares": 264941431
+    },
+    {
+      "ticker": "CB",
+      "shares": 34249183
+    },
+    {
+      "ticker": "MCO",
+      "shares": 24669778
+    },
+    {
+      "ticker": "GOOG",
+      "shares": 27188433
+    },
+    {
+      "ticker": "KHC",
+      "shares": 325634818
+    },
+    {
+      "ticker": "DVA",
+      "shares": 28880209
+    },
+    {
+      "ticker": "DAL",
+      "shares": 57320000
+    },
+    {
+      "ticker": "SIRI",
+      "shares": 124807117
+    },
+    {
+      "ticker": "VRSN",
+      "shares": 8989880
+    },
+    {
+      "ticker": "KR",
+      "shares": 39000000
+    },
+    {
+      "ticker": "ALLY",
+      "shares": 27000000
+    },
+    {
+      "ticker": "LEN",
+      "shares": 13111741
+    },
+    {
+      "ticker": "LLYVK",
+      "shares": 10587143
+    },
+    {
+      "ticker": "NYT",
+      "shares": 15700000
+    },
+    {
+      "ticker": "COF",
+      "shares": 3000000
+    },
+    {
+      "ticker": "LLYVA",
+      "shares": 4986588
+    },
+    {
+      "ticker": "LPX",
+      "shares": 5664793
+    },
+    {
+      "ticker": "NUE",
+      "shares": 1857752
+    },
+    {
+      "ticker": "M",
+      "shares": 7347426
+    },
+    {
+      "ticker": "NVR",
+      "shares": 11112
+    },
+    {
+      "ticker": "LEN.B",
+      "shares": 298117
+    },
+    {
+      "ticker": "JEF",
+      "shares": 433558
+    },
+    {
+      "ticker": "DHI",
+      "shares": 3564
+    }
+  ]
+}
